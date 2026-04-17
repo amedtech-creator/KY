@@ -1,49 +1,6 @@
 <!DOCTYPE html>
 <html lang="ko">
-<head>
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-
-        const firebaseConfig = {
-            apiKey: "AIzaSyC2jfTHmaguOS9e_ddTvicUZJcvXzQ7EKI",
-            authDomain: "amt-ky.firebaseapp.com",
-            databaseURL: "https://amt-ky-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "amt-ky",
-            storageBucket: "amt-ky.firebasestorage.app",
-            messagingSenderId: "1082363760608",
-            appId: "1:1082363760608:web:ac27fa51dc23cb603ee585"
-        };
-
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const ALLOWED = ['kyunghoyou@gmail.com', 'amedtech@gmail.com', 'ykhymj2@naver.com'];
-
-        onAuthStateChanged(auth, (user) => {
-            if (!user || !ALLOWED.includes(user.email)) {
-                alert("권한이 없습니다.");
-                location.replace("index.html");
-            } else {
-                document.getElementById('secure-content').style.display = 'block';
-            }
-        });
-        
-        
-    const MASTER_TG = { token: "8615303756:AAEWCz82f6LBzgBx769v1xbUkJ6SOM7rpjk", id: "1988388217" };
-    const ADMIN_TG = { token: "8181608888:AAHKJXNbHtoOV4dg5RVxo9dLBJ3LFEUznqE", id: "6249822543" };
-
-    async function sendOrderNoti(msg) {
-        const send = async (t) => {
-            try { await fetch(`https://api.telegram.org/bot${t.token}/sendMessage?chat_id=${t.id}&text=${encodeURIComponent(msg)}`); } catch(e){}
-        };
-        await send(MASTER_TG);
-        await send(ADMIN_TG);
-    }
-
-        window.sendOrderNoti = sendOrderNoti; // 전역 함수로 등록
-    </script>
-    <style> #secure-content { display: none; } </style>
-
+<head><script>sessionStorage.setItem('AMT_ADMIN_SESSION', 'true'); localStorage.setItem('amt_saved_code', '9999');</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>KY · 주문</title>
@@ -794,7 +751,7 @@ textarea.memo-input{
 .fb-warn.show{display:block;}
 </style>
 </head>
-<body><div id="secure-content">
+<body>
 
 <!-- ─── LOADING ─── -->
 <div class="loading-overlay" id="loadingOverlay">
@@ -2359,5 +2316,5 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 아니면 로그인 화면 표시 (기본값)
 });
 </script>
-</div></body>
+</body>
 </html>

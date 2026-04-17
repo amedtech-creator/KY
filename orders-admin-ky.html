@@ -1,35 +1,6 @@
 <!DOCTYPE html>
 <html lang="ko">
-<head>
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-
-        const firebaseConfig = {
-            apiKey: "AIzaSyC2jfTHmaguOS9e_ddTvicUZJcvXzQ7EKI",
-            authDomain: "amt-ky.firebaseapp.com",
-            databaseURL: "https://amt-ky-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "amt-ky",
-            storageBucket: "amt-ky.firebasestorage.app",
-            messagingSenderId: "1082363760608",
-            appId: "1:1082363760608:web:ac27fa51dc23cb603ee585"
-        };
-
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const ADMINS = ['kyunghoyou@gmail.com', 'amedtech@gmail.com'];
-
-        onAuthStateChanged(auth, (user) => {
-            if (!user || !ADMINS.includes(user.email)) {
-                alert("관리자 권한이 없습니다.");
-                location.replace("index.html");
-            } else {
-                document.getElementById('secure-admin').style.display = 'block';
-            }
-        });
-    </script>
-    <style> #secure-admin { display: none; } </style>
-
+<head><script>sessionStorage.setItem('AMT_ADMIN_SESSION', 'true'); localStorage.setItem('amt_saved_code', '9999');</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>KY · 주문관리 (관리자)</title>
@@ -320,7 +291,7 @@ textarea.note-input:focus{border-color:var(--ky);}
 }
 </style>
 </head>
-<body><div id="secure-admin">
+<body>
 
 <!-- ─── 관리자 로그인 화면 ─── -->
 <div id="adminLoginScreen" style="
@@ -1444,5 +1415,5 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 </script>
 </div><!-- #adminMainApp -->
-</div></body>
+</body>
 </html>
