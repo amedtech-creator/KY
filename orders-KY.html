@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <!-- ★ 외부 리소스 빠른 연결 (DNS/TLS 핸드셰이크 선행) -->
+  <link rel="preconnect" href="https://www.gstatic.com">
+  <link rel="preconnect" href="https://amt-ky-default-rtdb.asia-southeast1.firebasedatabase.app">
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
 <title>KY · 주문</title>
 
 <!-- PWA -->
@@ -72,7 +76,6 @@
   if(auth){
     let _authInitialized = false;
     onAuthStateChanged(auth, (user) => {
-      console.log('[KY orders] Auth 상태:', user ? user.email : 'null');
       if(!_authInitialized){ _authInitialized = true; return; }
       if(!user){
         const sess = sessionStorage.getItem('ky_auth_session');
@@ -1270,16 +1273,13 @@ function getKyAuthSession(){
 async function doLogin(){
   // ★ KY 대리점 로그인 - Auth 세션에서 dealer 정보 로드
   const sess = getKyAuthSession();
-  console.log('[KY Login] 세션:', sess);
   if(!sess || !sess.email){ toast('로그인 세션이 없습니다','error'); return; }
   showLoading();
   const fb = window._fb;
-  console.log('[KY Login] Firebase 상태:', fb && fb.ready);
   if(!fb || !fb.ready){ hideLoading(); toast('Firebase 연결 오류','error'); return; }
 
   // Firebase Auth 실제 로그인 상태 확인
   const authUser = fb.auth && fb.auth.currentUser;
-  console.log('[KY Login] Auth User:', authUser ? authUser.email : 'null');
   if(!authUser){
     hideLoading();
     toast('Firebase Auth 인증 없음 - 재로그인 필요','error');
@@ -1288,7 +1288,6 @@ async function doLogin(){
   }
 
   try{
-    console.log('[KY Login] amt_data/dealers 읽기 시도...');
     const snap = await fb.get(fb.ref(fb.db,'amt_data/dealers'));
     console.log('[KY Login] snap.exists():', snap.exists());
     if(!snap.exists()){ hideLoading(); toast('대리점 데이터 없음','error'); return; }
@@ -1298,10 +1297,10 @@ async function doLogin(){
     amtData.dealers = dealers;
     // 이메일로 대리점 찾기
     const dealer = Object.values(dealers).find(d => d && d.email === sess.email);
-    console.log('[KY Login] 매칭 대리점:', dealer ? dealer.name : '없음');
     if(!dealer){ hideLoading(); toast('등록된 대리점이 아닙니다: '+sess.email,'error'); return; }
     currentDealer = dealer;
-    await loadKyTelegramConfig().catch(()=>{});
+    // ★ 텔레그램 설정은 백그라운드로 (로그인 블로킹 방지)
+    loadKyTelegramConfig().catch(()=>{});
     hideLoading();
     enterApp();
   }catch(e){
@@ -1316,19 +1315,16 @@ function showLoginMsg(msg){ document.getElementById('loginMsg').textContent = ms
 async function tryAutoLogin(){
   // ★ Auth 세션 기반 자동 로그인
   const sess = getKyAuthSession();
-  console.log('[KY tryAutoLogin] 세션:', sess);
   if(!sess || !sess.email){ hideLoading(); return false; }
 
   // Firebase Auth 준비를 기다림 (최대 3초)
   const fb = window._fb;
   if(fb && fb.auth){
-    console.log('[KY tryAutoLogin] Auth 상태 대기...');
     await new Promise((resolve) => {
       let done = false;
       const timer = setTimeout(() => { if(!done){ done = true; resolve(); } }, 3000);
       const unsub = fb.auth.onAuthStateChanged ?
         fb.auth.onAuthStateChanged((user) => {
-          console.log('[KY tryAutoLogin] Auth 변화:', user ? user.email : 'null');
           if(!done){
             done = true;
             clearTimeout(timer);
@@ -1336,7 +1332,6 @@ async function tryAutoLogin(){
           }
         }) : null;
     });
-    console.log('[KY tryAutoLogin] 현재 Auth User:', fb.auth.currentUser ? fb.auth.currentUser.email : 'null');
   }
 
   // 세션 있으면 doLogin 호출
@@ -1358,18 +1353,26 @@ function doLogout(){
    ENTER APP
 ═══════════════════════════════════════════════════ */
 async function enterApp(){
+  // ★ 화면 먼저 즉시 표시 - 사용자에게 즉각 피드백
   hideLoading();
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('mainApp').style.display = 'block';
-
   updateHeaderDealer();
   updateSettingsInfo();
   loadProductGrid();
-  await loadOrderHistory();
-  startListeners();
-  renderHome();
-  loadNotifications();
+  renderHome(); // 빈 상태로 먼저 렌더
   checkFbStatus();
+
+  // ★ 나머지는 비동기로 병렬 실행 (로그인 블로킹 방지)
+  Promise.all([
+    loadOrderHistory().catch(e => console.warn('주문내역 로드 실패:', e)),
+    loadNotifications().catch(e => console.warn('알림 로드 실패:', e))
+  ]).then(() => {
+    renderHome(); // 데이터 로드 후 재렌더
+  });
+
+  // 리스너는 별도
+  try{ startListeners(); }catch(e){ console.warn('리스너 등록 실패:', e); }
 }
 
 function updateHeaderDealer(){
@@ -1743,7 +1746,7 @@ async function sendTelegramKY(chatId, text){
     });
     const data = await res.json();
     if(!data.ok) console.warn('[텔레그램-KY] 발송 실패:', data.description);
-    else console.log('[텔레그램-KY] 발송 완료 →', chatId);
+    else
   } catch(e){
     console.warn('[텔레그램-KY] 오류:', e.message);
   }
@@ -2351,7 +2354,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
     const swPath = '/KY/sw-KY.js';
     navigator.serviceWorker.register(swPath + '?v=20260418-v10')
-      .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }
 
