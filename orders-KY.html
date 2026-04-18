@@ -68,14 +68,21 @@
   } catch(e){ console.warn('Firebase init failed', e); }
   window._fb = { db, auth, ref, set, get, push, onValue, off, serverTimestamp, ready: firebaseReady };
 
-  // ★ Firebase Auth 상태 변화 감지 — 로그아웃 시 index로 리다이렉트
+  // ★ Firebase Auth 상태 변화 감지 — 초기화 후 실제 로그아웃 시만 리다이렉트
   if(auth){
+    let _authInitialized = false;
     onAuthStateChanged(auth, (user) => {
       console.log('[KY orders] Auth 상태:', user ? user.email : 'null');
+      if(!_authInitialized){ _authInitialized = true; return; }
       if(!user){
-        // 로그인 안된 상태 - 이미 orders-KY에 있다면 index로
         const sess = sessionStorage.getItem('ky_auth_session');
-        if(!sess) setTimeout(()=>location.replace('index-KY.html'), 500);
+        if(!sess) return;
+        setTimeout(() => {
+          if(!auth.currentUser){
+            sessionStorage.removeItem('ky_auth_session');
+            location.replace('index-KY.html');
+          }
+        }, 1000);
       }
     });
   }
@@ -833,7 +840,8 @@ textarea.memo-input{
         <div class="kpi-sub">건</div>
       </div>
       <div class="kpi">
-        <div class="kpi-label">접수완료</div>
+        <div class="kpi-label">출고완료</div>
+        <div class="kpi-value" id="kpiShipped">0</div>
         <div class="kpi-sub">건</div>
       </div>
     </div>
@@ -1681,7 +1689,15 @@ async function submitOrder(){
     addLocalNotif('🚀 주문이 접수되었습니다', order.items.map(i=>i.product+'×'+i.qty).join(', '), orderId);
 
     // ★ 텔레그램으로 주문 알림 발송 (총관리자, 비동기)
-    sendTelegramOrder(order).catch(() => {});
+    (async () => {
+      try{
+        // 설정이 비어있으면 다시 로드
+        if(!KY_BOT_TOKEN || !KY_SUPER_ADMIN_CHAT_ID_LOADED){
+          await loadKyTelegramConfig().catch(()=>{});
+        }
+        await sendTelegramOrder(order);
+      }catch(e){ console.warn('텔레그램 발송 실패:', e); }
+    })();
 
     hideLoading();
     toast('✅ 주문이 제출되었습니다!', 'success');
@@ -1715,19 +1731,19 @@ async function submitOrder(){
 // const KY_ADMIN3_CHAT_ID = '';
 
 async function sendTelegramKY(chatId, text){
-  if(!KY_TELEGRAM_BOT_TOKEN || !chatId){
-    console.warn('[텔레그램-KY] 봇 토큰 또는 채팅 ID 미설정');
+  if(!KY_BOT_TOKEN || !chatId){
+    console.warn('[텔레그램-KY] 봇 토큰 또는 채팅 ID 미설정', {hasToken:!!KY_BOT_TOKEN, chatId});
     return;
   }
   try{
-    const res = await fetch('https://api.telegram.org/bot' + KY_TELEGRAM_BOT_TOKEN + '/sendMessage', {
+    const res = await fetch('https://api.telegram.org/bot' + KY_BOT_TOKEN + '/sendMessage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'HTML' })
     });
     const data = await res.json();
     if(!data.ok) console.warn('[텔레그램-KY] 발송 실패:', data.description);
-    else console.log('[텔레그램-KY] 발송 완료');
+    else console.log('[텔레그램-KY] 발송 완료 →', chatId);
   } catch(e){
     console.warn('[텔레그램-KY] 오류:', e.message);
   }
@@ -1784,23 +1800,40 @@ async function loadOrderHistory(){
   if(!currentDealer) return;
 
   try{
-    // ★ 대리점은 자기 주문만 쿼리 (dealerEmail 기준) - Firebase 규칙에 부합
+    // ★ 대리점은 자기 주문만 쿼리 (dealerEmail 기준)
     const dealerEmail = (currentDealer.email||'').toLowerCase();
-    let allList = [];
+    let activeList = [];
+    let historyList = [];
+
+    // 현재 주문 (대기/접수)
     if(dealerEmail && fb.query && fb.orderByChild && fb.equalTo){
       const q = fb.query(fb.ref(fb.db, 'ky_orders'), fb.orderByChild('dealerEmail'), fb.equalTo(dealerEmail));
       const snap = await fb.get(q);
-      if(snap.exists()) allList = Object.values(snap.val());
+      if(snap.exists()) activeList = Object.values(snap.val());
     } else {
       const snap = await fb.get(fb.ref(fb.db, 'ky_orders'));
-      if(snap.exists()) allList = Object.values(snap.val()).filter(o => o.dealerId === currentDealer.id);
+      if(snap.exists()) activeList = Object.values(snap.val()).filter(o => o.dealerId === currentDealer.id);
     }
 
-    // ★ 6개월 이전 주문 정리
+    // ★ 히스토리(출고완료) 주문도 읽어오기 - 질문 9번
+    try{
+      if(dealerEmail && fb.query && fb.orderByChild && fb.equalTo){
+        const qh = fb.query(fb.ref(fb.db, 'ky_orders_history'), fb.orderByChild('dealerEmail'), fb.equalTo(dealerEmail));
+        const snapH = await fb.get(qh);
+        if(snapH.exists()) historyList = Object.values(snapH.val());
+      } else {
+        const snapH = await fb.get(fb.ref(fb.db, 'ky_orders_history'));
+        if(snapH.exists()) historyList = Object.values(snapH.val()).filter(o => o.dealerId === currentDealer.id);
+      }
+    }catch(e){ console.warn('히스토리 로드 실패:', e); }
+
+    const allList = [...activeList, ...historyList];
+
+    // ★ 6개월 이전 주문 정리 (활성 주문만)
     const sixMonthsAgo = new Date();
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
     const cutoff = sixMonthsAgo.toISOString().slice(0, 10);
-    pruneOldKyOrders(allList, cutoff).catch(() => {});
+    pruneOldKyOrders(activeList, cutoff).catch(() => {});
 
     kyOrders = allList
       .filter(o => (o.createdAt||o.orderDate||'') >= cutoff)
@@ -2090,11 +2123,14 @@ function renderHome(){
   const myOrders = kyOrders.filter(o => o.dealerId === currentDealer.id);
   const monthOrders = myOrders.filter(o => o.orderDate.startsWith(mo) && o.status !== 'cancelled');
   const pending = myOrders.filter(o => o.status === 'pending').length;
+  const shipped = monthOrders.filter(o => o.status === 'shipped').length;
   const monthAmt = monthOrders.reduce((s, o) => s + o.total, 0);
 
   document.getElementById('kpiMonthCount').textContent = fmt(monthOrders.length);
   document.getElementById('kpiMonthAmt').textContent = fmt(monthAmt);
   document.getElementById('kpiPending').textContent = fmt(pending);
+  const shippedEl = document.getElementById('kpiShipped');
+  if(shippedEl) shippedEl.textContent = fmt(shipped);
   // ★ 최근 5개 (취소 제외)
   const recent = myOrders.filter(o => o.status !== 'cancelled').slice(0, 5);
   const el = document.getElementById('recentOrders');
@@ -2314,7 +2350,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // (claude.ai, 로컬 등 다른 환경에서는 보안 정책상 등록 불가 → 무시)
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
     const swPath = '/KY/sw-KY.js';
-    navigator.serviceWorker.register(swPath + '?v=20260418-v8')
+    navigator.serviceWorker.register(swPath + '?v=20260418-v10')
       .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }

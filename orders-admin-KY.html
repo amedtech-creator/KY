@@ -56,12 +56,20 @@
     db = getDatabase(app);
     auth = getAuth(app);
     firebaseReady = true;
+    let _authInitialized = false;
     onAuthStateChanged(auth, (user) => {
       console.log('[KY admin] Auth 상태:', user ? user.email : 'null');
+      if(!_authInitialized){ _authInitialized = true; return; }
       if(!user){
-        sessionStorage.removeItem('ky_auth_session');
-        sessionStorage.removeItem('amt_auth_session');
-        setTimeout(()=>location.replace('index-KY.html'), 300);
+        const sess = sessionStorage.getItem('ky_auth_session') || sessionStorage.getItem('amt_auth_session');
+        if(!sess) return;
+        setTimeout(() => {
+          if(!auth.currentUser){
+            sessionStorage.removeItem('ky_auth_session');
+            sessionStorage.removeItem('amt_auth_session');
+            location.replace('index-KY.html');
+          }
+        }, 1000);
       }
     });
   } catch(e){ console.warn('Firebase init failed', e); }
@@ -1286,7 +1294,7 @@ function filterByDealer(name){
 window.addEventListener('DOMContentLoaded', () => {
   // SW 등록 — github.io 배포환경에서만
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
-    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260418-v6')
+    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260418-v10')
       .then(r => console.log('[KY Admin SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY Admin SW] 등록 스킵:', e.message));
   }
