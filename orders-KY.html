@@ -1294,6 +1294,7 @@ async function doLogin(){
     if(!dealer){ hideLoading(); toast('등록된 대리점이 아닙니다: '+sess.email,'error'); return; }
     currentDealer = dealer;
     await loadKyTelegramConfig().catch(()=>{});
+    hideLoading();
     enterApp();
   }catch(e){
     console.error('[KY Login] 로드 실패:', e);
@@ -1349,6 +1350,7 @@ function doLogout(){
    ENTER APP
 ═══════════════════════════════════════════════════ */
 async function enterApp(){
+  hideLoading();
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('mainApp').style.display = 'block';
 
