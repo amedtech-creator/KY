@@ -15,6 +15,8 @@
   import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getDatabase, ref, set, get, onValue, off }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+  import { getAuth, onAuthStateChanged }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
   // ★ Firebase 설정 하드코딩 — 어느 기기에서든 자동 연결
   const DEFAULT_FB_CFG = {
@@ -41,9 +43,9 @@
       localStorage.setItem('amt_firebase_cfg', JSON.stringify(DEFAULT_FB_CFG));
   } catch(e){}
 
-  let app, db, firebaseReady = false;
+  let app, db, auth, firebaseReady = false;
   try {
-    const appName = 'ky-admin';
+    const appName = 'ky-order';
     app = getApps().find(a => a.name === appName)
           || initializeApp({
               apiKey: savedCfg.apiKey, authDomain: savedCfg.authDomain,
@@ -52,9 +54,18 @@
               databaseURL: savedCfg.databaseURL
              }, appName);
     db = getDatabase(app);
+    auth = getAuth(app);
     firebaseReady = true;
+    onAuthStateChanged(auth, (user) => {
+      console.log('[KY admin] Auth 상태:', user ? user.email : 'null');
+      if(!user){
+        sessionStorage.removeItem('ky_auth_session');
+        sessionStorage.removeItem('amt_auth_session');
+        setTimeout(()=>location.replace('index-KY.html'), 300);
+      }
+    });
   } catch(e){ console.warn('Firebase init failed', e); }
-  window._fb = { db, ref, set, get, onValue, off, ready: firebaseReady };
+  window._fb = { db, auth, ref, set, get, onValue, off, ready: firebaseReady };
 </script>
 
 <style>

@@ -18,10 +18,12 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 
 <!-- Firebase SDK -->
-<script type='text/javascript' src='https://www.genspark.ai/c9clESEbZkYZmJk0Yj_AKrSt0S5X0VBzGNbSHUOX1urF5ntUp0M_Ufso-SEivDMfJkAxNpUBsHxtvz_m-G15tPcu-5aTCJgHiPZ4yWv2MGFFgdRysWiPwfKh0HnjBGcDt6ktJIxWVl6_bZn-v_-IxVdgUhrG_tAzKB39H1u2dIx9uvfRP1_724zvUUGKuX3iZVr5asuwoke5aQOvEiqMdWbWJTzdbHHI5PBrl0vvHXcRR6IMeNjkRW8Mz4G78y4DQSsI9E6IGxv2DfK9qLqy7uhBC9dIJK-dCnOLS_Jvc4WNrchGFRBQasnIO5cWbsVZ4WzAvxw_Cb0v7XkCGZjFxxNNuOT9mlUkbm7DX4fg0_GyT2RNaJFKmuTHzWJwSQO5-vdznAI0Lbu1Fs5_nFLfNAVGdayfHWcg7lAkWnNyp7KQuTuacOcOHClec_Wwe9J3IrWdSIRvbKNWstBN-9Bd4okGvkof1HIwYSDtHP20FtmO7Hs32V83b6xAF4msIjgUDLIeuy7mZ1kC0VDt4nMoP0VLUvR2k_tl4lIijaPESHoxVbCUq-T3Hw4I7NK7r-jVKF-A4V8GW-J5zeiVN4Y7uzesM45ayw-gNfVCdKkT8Y6WbntHD660As6d3y83sKNArgHFWrafYd9jqoSw5-3WhvOm5kr9Jlf-X4rVClKaToZSMWq_koUt4hPK-xap5AQA6ML_5a_mKvmGlWg'></script><script type='text/javascript' src='https://www.genspark.ai/lTPKmiuY39qWuGgNhfq_dbsmlOLm6xvwLqC7SQsveNV6jmnFOwaNu2KODNT1UoRNGOOFr44KqBNUWu8T9Gm5ap6k-vpvg_xVQ1iuK3DogEI8-yXt67YkfmGS1nejMzReC5FKrl1GwP05zxLxv414VqZ8Qg69tZpPpifThGdQEA-5dnm_juJ2uGx41C-QvLp8nuzk6HA7jJY8Q2x6rKb38susjSrY6wzjkI_ndkaxvAL_9EYtC-FDj7agOqTXT7A5yhWugmPVc6komTaVrkIFBOS4o5Y0rtHd4PocXW_7-kkzPQhthGS3KbUpT_rd5Tv-rOKEWoIJGfV2LnmVM3ZxERpMU89PvyxJwizsmXuZI35or1TZh8KYMJDTLUB3s3cZY-BUx1jIrzhAr9_aERN7Tyets0247G-wPyewKVplw2a-tcpvhD1yBJ_A2UVzvZvvkcMALkySB0AYbzz035GyBdcrOX9dcDtt88aJvVslI7m7ODqPANfZU7Vl97RSJsEQm7cpza0kRNNpxBzjq-FyDOj-netidUsNpsakgS3i1ixdFCjajNsMBhVsAbYxXCORVQzo-nKf_1PyYGui64zhRjKjb-_Ape6stBbzXF8kMobpterOW13Hbndsyonvxv7Bwez6hQLDY1yLQ32Wwz87-Zq4yjMRYsWk2AQQiiPgrQrd5lHO7zaoRiUBna1XJH9YIA'></script><script type="module">
+<script type="module">
   import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getDatabase, ref, set, get, push, onValue, off, serverTimestamp }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+  import { getAuth, onAuthStateChanged, signOut }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
   // ★ Firebase 설정 하드코딩 — 어느 기기에서든 자동 연결
   const DEFAULT_FB_CFG = {
@@ -50,7 +52,7 @@
       localStorage.setItem('ky_firebase_cfg', JSON.stringify(DEFAULT_FB_CFG));
   } catch(e){}
 
-  let app, db, firebaseReady = false;
+  let app, db, auth, firebaseReady = false;
   try {
     const appName = 'ky-order';
     app = getApps().find(a => a.name === appName)
@@ -61,9 +63,22 @@
               databaseURL: savedCfg.databaseURL
              }, appName);
     db = getDatabase(app);
+    auth = getAuth(app);
     firebaseReady = true;
   } catch(e){ console.warn('Firebase init failed', e); }
-  window._fb = { db, ref, set, get, push, onValue, off, serverTimestamp, ready: firebaseReady };
+  window._fb = { db, auth, ref, set, get, push, onValue, off, serverTimestamp, ready: firebaseReady };
+
+  // ★ Firebase Auth 상태 변화 감지 — 로그아웃 시 index로 리다이렉트
+  if(auth){
+    onAuthStateChanged(auth, (user) => {
+      console.log('[KY orders] Auth 상태:', user ? user.email : 'null');
+      if(!user){
+        // 로그인 안된 상태 - 이미 orders-KY에 있다면 index로
+        const sess = sessionStorage.getItem('ky_auth_session');
+        if(!sess) setTimeout(()=>location.replace('index-KY.html'), 500);
+      }
+    });
+  }
 </script>
 
 <style>
@@ -1247,24 +1262,44 @@ function getKyAuthSession(){
 async function doLogin(){
   // ★ KY 대리점 로그인 - Auth 세션에서 dealer 정보 로드
   const sess = getKyAuthSession();
+  console.log('[KY Login] 세션:', sess);
   if(!sess || !sess.email){ toast('로그인 세션이 없습니다','error'); return; }
   showLoading();
   const fb = window._fb;
+  console.log('[KY Login] Firebase 상태:', fb && fb.ready);
   if(!fb || !fb.ready){ hideLoading(); toast('Firebase 연결 오류','error'); return; }
+
+  // Firebase Auth 실제 로그인 상태 확인
+  const authUser = fb.auth && fb.auth.currentUser;
+  console.log('[KY Login] Auth User:', authUser ? authUser.email : 'null');
+  if(!authUser){
+    hideLoading();
+    toast('Firebase Auth 인증 없음 - 재로그인 필요','error');
+    setTimeout(()=>location.replace('index-KY.html'), 1500);
+    return;
+  }
+
   try{
-    // 대리점은 amt_data/dealers 만 접근 가능 (보안 규칙)
+    console.log('[KY Login] amt_data/dealers 읽기 시도...');
     const snap = await fb.get(fb.ref(fb.db,'amt_data/dealers'));
+    console.log('[KY Login] snap.exists():', snap.exists());
     if(!snap.exists()){ hideLoading(); toast('대리점 데이터 없음','error'); return; }
     const dealers = snap.val() || {};
+    console.log('[KY Login] 대리점 수:', Object.keys(dealers).length);
     amtData = amtData || {};
     amtData.dealers = dealers;
     // 이메일로 대리점 찾기
     const dealer = Object.values(dealers).find(d => d && d.email === sess.email);
+    console.log('[KY Login] 매칭 대리점:', dealer ? dealer.name : '없음');
     if(!dealer){ hideLoading(); toast('등록된 대리점이 아닙니다: '+sess.email,'error'); return; }
     currentDealer = dealer;
     await loadKyTelegramConfig().catch(()=>{});
     enterApp();
-  }catch(e){ hideLoading(); toast('로드 실패: '+e.message,'error'); }
+  }catch(e){
+    console.error('[KY Login] 로드 실패:', e);
+    hideLoading();
+    toast('로드 실패: '+e.message,'error');
+  }
 }
 
 function showLoginMsg(msg){ document.getElementById('loginMsg').textContent = msg; }
@@ -1272,7 +1307,29 @@ function showLoginMsg(msg){ document.getElementById('loginMsg').textContent = ms
 async function tryAutoLogin(){
   // ★ Auth 세션 기반 자동 로그인
   const sess = getKyAuthSession();
+  console.log('[KY tryAutoLogin] 세션:', sess);
   if(!sess || !sess.email){ hideLoading(); return false; }
+
+  // Firebase Auth 준비를 기다림 (최대 3초)
+  const fb = window._fb;
+  if(fb && fb.auth){
+    console.log('[KY tryAutoLogin] Auth 상태 대기...');
+    await new Promise((resolve) => {
+      let done = false;
+      const timer = setTimeout(() => { if(!done){ done = true; resolve(); } }, 3000);
+      const unsub = fb.auth.onAuthStateChanged ?
+        fb.auth.onAuthStateChanged((user) => {
+          console.log('[KY tryAutoLogin] Auth 변화:', user ? user.email : 'null');
+          if(!done){
+            done = true;
+            clearTimeout(timer);
+            resolve();
+          }
+        }) : null;
+    });
+    console.log('[KY tryAutoLogin] 현재 Auth User:', fb.auth.currentUser ? fb.auth.currentUser.email : 'null');
+  }
+
   // 세션 있으면 doLogin 호출
   await doLogin();
   return !!currentDealer;

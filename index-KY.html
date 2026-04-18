@@ -107,7 +107,7 @@ const SESSION_KEY = 'ky_auth_session';
 const SAVED_EMAIL = 'ky_saved_email';
 const SAVED_PW    = 'ky_saved_pw';
 
-const app  = getApps().find(a=>a.name==='ky-login') || initializeApp(FB_CFG,'ky-login');
+const app  = getApps().find(a=>a.name==='ky-order') || initializeApp(FB_CFG,'ky-order');
 const auth = getAuth(app);
 const db   = getDatabase(app);
 
