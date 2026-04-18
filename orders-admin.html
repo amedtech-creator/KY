@@ -21,10 +21,10 @@
     apiKey: "AIzaSyC2jfTHmaguOS9e_ddTvicUZJcvXzQ7EKI",
     authDomain: "amt-ky.firebaseapp.com",
     databaseURL: "https://amt-ky-default-rtdb.firebaseio.com",
-    projectId: "mymonth-6cd61",
-    storageBucket: "mymonth-6cd61.firebasestorage.app",
-    messagingSenderId: "1067760522796",
-    appId: "1:1067760522796:web:f97a12c210482e6e8de389"
+    projectId: "amt-ky",
+    storageBucket: "amt-ky.firebasestorage.app",
+    messagingSenderId: "1082363760608",
+    appId: "1:1082363760608:web:ac27fa51dc23cb603ee585"
   };
 
   let savedCfg = DEFAULT_FB_CFG;
@@ -1279,7 +1279,20 @@ window.addEventListener('DOMContentLoaded', () => {
       .then(r => console.log('[KY Admin SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY Admin SW] 등록 스킵:', e.message));
   }
-  // 세션 복원 시도
+  // ★ index-ky.html Firebase Auth 세션 먼저 확인 (ky_auth_session)
+  const authSession = sessionStorage.getItem('ky_auth_session');
+  if (authSession) {
+    try {
+      const { email, role } = JSON.parse(authSession);
+      if (role === 'super' || role === 'admin') {
+        setAdminSession(email);
+        showAdminApp();
+        return;
+      }
+    } catch(e) {}
+  }
+
+  // 자체 세션 복원 (직접 코드 입력으로 로그인한 경우)
   const saved = sessionStorage.getItem(ADMIN_SESSION_KEY);
   if(saved){
     setAdminSession(saved);
