@@ -2238,8 +2238,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 서비스워커 등록 — github.io 배포환경에서만 작동
   // (claude.ai, 로컬 등 다른 환경에서는 보안 정책상 등록 불가 → 무시)
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
-    const swPath = '/KY-order/sw-KY.js';
-    navigator.serviceWorker.register(swPath + '?v=20260418-v5')
+    const swPath = '/KY/sw-KY.js';
+    navigator.serviceWorker.register(swPath + '?v=20260418-v6')
       .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }

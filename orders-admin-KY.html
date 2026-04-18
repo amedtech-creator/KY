@@ -472,8 +472,8 @@ function startListener(){
                 body: `${o.dealerName}
 ${(o.items||[]).map(i=>i.product+' '+i.qty+'개').join(', ')}
 합계: ${fmt(o.total)}원`,
-                icon: '/KY-order/icon-192.png',
-                badge: '/KY-order/icon-192.png',
+                icon: '/KY/icon-192.png',
+                badge: '/KY/icon-192.png',
                 tag: 'ky-neworder-' + o.id,
                 requireInteraction: true
               });
@@ -482,7 +482,7 @@ ${(o.items||[]).map(i=>i.product+' '+i.qty+'개').join(', ')}
                 if(perm === 'granted'){
                   new Notification('📦 KY 새 주문!', {
                     body: `${o.dealerName} | ${fmt(o.total)}원`,
-                    icon: '/KY-order/icon-192.png',
+                    icon: '/KY/icon-192.png',
                     tag: 'ky-neworder-' + o.id
                   });
                 }
@@ -1275,7 +1275,7 @@ function filterByDealer(name){
 window.addEventListener('DOMContentLoaded', () => {
   // SW 등록 — github.io 배포환경에서만
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
-    navigator.serviceWorker.register('/KY-order/sw-KY.js?v=20260418-v5')
+    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260418-v6')
       .then(r => console.log('[KY Admin SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY Admin SW] 등록 스킵:', e.message));
   }
