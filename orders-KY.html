@@ -1746,7 +1746,7 @@ async function sendTelegramKY(chatId, text){
     });
     const data = await res.json();
     if(!data.ok) console.warn('[텔레그램-KY] 발송 실패:', data.description);
-    else
+    else console.log('[텔레그램-KY] 발송 성공');
   } catch(e){
     console.warn('[텔레그램-KY] 오류:', e.message);
   }
