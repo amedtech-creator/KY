@@ -1,5 +1,5 @@
-// KY 주문 시스템 Service Worker v20260418-v7
-const CACHE = 'ky-order-v20260418-v7';
+// KY 주문 시스템 Service Worker v20260418-v8
+const CACHE = 'ky-order-v20260418-v8';
 const APP_ROOT = '/KY';
 const ASSETS = [
   APP_ROOT + '/',

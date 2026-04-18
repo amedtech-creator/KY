@@ -1653,6 +1653,7 @@ async function submitOrder(){
       id: orderId,
       dealerId: currentDealer.id,
       dealerName: currentDealer.name,
+      dealerEmail: (currentDealer.email||'').toLowerCase(),
       items: cart.map(c => ({ product: c.product, qty: c.qty, price: c.price, total: c.qty * c.price })),
       total: subtotal,
       totalQty: cart.reduce((s, c) => s + c.qty, 0),
@@ -1781,10 +1782,17 @@ async function loadOrderHistory(){
   if(!currentDealer) return;
 
   try{
-    const snap = await fb.get(fb.ref(fb.db, 'ky_orders'));
-    if(!snap.exists()){ kyOrders = []; renderOrderHistoryList([]); return; }
-    const all = snap.val();
-    const allList = Object.values(all);
+    // ★ 대리점은 자기 주문만 쿼리 (dealerEmail 기준) - Firebase 규칙에 부합
+    const dealerEmail = (currentDealer.email||'').toLowerCase();
+    let allList = [];
+    if(dealerEmail && fb.query && fb.orderByChild && fb.equalTo){
+      const q = fb.query(fb.ref(fb.db, 'ky_orders'), fb.orderByChild('dealerEmail'), fb.equalTo(dealerEmail));
+      const snap = await fb.get(q);
+      if(snap.exists()) allList = Object.values(snap.val());
+    } else {
+      const snap = await fb.get(fb.ref(fb.db, 'ky_orders'));
+      if(snap.exists()) allList = Object.values(snap.val()).filter(o => o.dealerId === currentDealer.id);
+    }
 
     // ★ 6개월 이전 주문 정리
     const sixMonthsAgo = new Date();
@@ -1793,12 +1801,12 @@ async function loadOrderHistory(){
     pruneOldKyOrders(allList, cutoff).catch(() => {});
 
     kyOrders = allList
-      .filter(o => o.dealerId === currentDealer.id && (o.createdAt||o.orderDate||'') >= cutoff)
+      .filter(o => (o.createdAt||o.orderDate||'') >= cutoff)
       .sort((a,b) => kyOrderSortStamp(b).localeCompare(kyOrderSortStamp(a)) || (b.orderDate||'').localeCompare(a.orderDate||''));
     renderOrderHistoryList(kyOrders);
     renderHome();
   } catch(e){
-    console.warn('주문 내역 로드 실패', e);
+    console.error('주문 내역 로드 실패', e);
   }
 }
 
@@ -2119,7 +2127,13 @@ function startListeners(){
     // ★ 초기 1회는 화면만 동기화하고, 그 이후부터만 상태변경 알림을 띄움
     let baselineLoaded = false;
 
-    _orderListener = fb.onValue(fb.ref(fb.db, 'ky_orders'), (snap) => {
+    // 대리점은 자기 주문만 실시간 감시
+    const dealerEmail = (currentDealer.email||'').toLowerCase();
+    const orderRef = (dealerEmail && fb.query && fb.orderByChild && fb.equalTo)
+      ? fb.query(fb.ref(fb.db, 'ky_orders'), fb.orderByChild('dealerEmail'), fb.equalTo(dealerEmail))
+      : fb.ref(fb.db, 'ky_orders');
+
+    _orderListener = fb.onValue(orderRef, (snap) => {
       const prev = JSON.parse(JSON.stringify(kyOrders || []));
 
       if(!snap.exists()){
@@ -2172,9 +2186,11 @@ function startListeners(){
   }
 
   if(!_dataListener){
-    _dataListener = fb.onValue(fb.ref(fb.db, 'amt_data'), (snap) => {
+    // 대리점은 amt_data/dealers 만 접근 가능
+    _dataListener = fb.onValue(fb.ref(fb.db, 'amt_data/dealers'), (snap) => {
       if(!snap.exists()) return;
-      amtData = snap.val();
+      amtData = amtData || {};
+      amtData.dealers = snap.val();
       if(document.getElementById('page-order').classList.contains('active') &&
          document.getElementById('orderStep1').style.display !== 'none'){
         loadProductGrid();
@@ -2296,7 +2312,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // (claude.ai, 로컬 등 다른 환경에서는 보안 정책상 등록 불가 → 무시)
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
     const swPath = '/KY/sw-KY.js';
-    navigator.serviceWorker.register(swPath + '?v=20260418-v6')
+    navigator.serviceWorker.register(swPath + '?v=20260418-v8')
       .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }
