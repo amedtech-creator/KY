@@ -53,7 +53,7 @@
     </div>
     <div class="field">
       <label>코드번호</label>
-      <input type="password" id="pw" placeholder="코드번호 입력" autocomplete="current-password"
+      <input type="password" id="pw" placeholder="코드번호 입력" autocomplete="off"
         onkeydown="if(event.key==='Enter')doLogin()">
     </div>
     <div class="remember-row">
@@ -116,9 +116,8 @@ let _pendingEmail='', _pendingOtpCode='', _otpExpiry=0, _timerInterval=null;
 // ─── 저장된 이메일/비밀번호 자동입력 ──────────────────────
 (function restoreSaved(){
   const em = localStorage.getItem(SAVED_EMAIL)||'';
-  const pw = localStorage.getItem(SAVED_PW)||'';
   if(em) document.getElementById('email').value = em;
-  if(pw) document.getElementById('pw').value = pw;
+  // 코드번호는 보안상 저장하지 않음 (자동 로그인은 DEVICE_KEY + Firebase Auth 세션으로 처리)
 })();
 
 // ─── Auth 상태 감지 ────────────────────────────────────────
@@ -218,8 +217,7 @@ window.verifyOtp = async () => {
   if(document.getElementById('rememberMe').checked){
     localStorage.setItem(DEVICE_KEY, user.uid);
     localStorage.setItem(SAVED_EMAIL, _pendingEmail);
-    const pwVal = document.getElementById('pw').value;
-    if(pwVal) localStorage.setItem(SAVED_PW, pwVal);
+    // 코드번호(비밀번호)는 저장하지 않음 - Firebase Auth가 자동 로그인 유지
   }
   set(ref(db,'amt_otp/'+btoa(_pendingEmail).replace(/=/g,'')),null).catch(()=>{});
 

@@ -1252,13 +1252,15 @@ async function doLogin(){
   const fb = window._fb;
   if(!fb || !fb.ready){ hideLoading(); toast('Firebase 연결 오류','error'); return; }
   try{
-    const snap = await fb.get(fb.ref(fb.db,'amt_data'));
-    if(!snap.exists()){ hideLoading(); toast('데이터 없음','error'); return; }
-    amtData = snap.val();
-    const dealers = amtData.dealers || {};
+    // 대리점은 amt_data/dealers 만 접근 가능 (보안 규칙)
+    const snap = await fb.get(fb.ref(fb.db,'amt_data/dealers'));
+    if(!snap.exists()){ hideLoading(); toast('대리점 데이터 없음','error'); return; }
+    const dealers = snap.val() || {};
+    amtData = amtData || {};
+    amtData.dealers = dealers;
     // 이메일로 대리점 찾기
-    const dealer = Object.values(dealers).find(d => d.email === sess.email);
-    if(!dealer){ hideLoading(); toast('등록된 대리점이 아닙니다','error'); return; }
+    const dealer = Object.values(dealers).find(d => d && d.email === sess.email);
+    if(!dealer){ hideLoading(); toast('등록된 대리점이 아닙니다: '+sess.email,'error'); return; }
     currentDealer = dealer;
     await loadKyTelegramConfig().catch(()=>{});
     enterApp();
@@ -2237,7 +2239,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // (claude.ai, 로컬 등 다른 환경에서는 보안 정책상 등록 불가 → 무시)
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
     const swPath = '/KY-order/sw-KY.js';
-    navigator.serviceWorker.register(swPath + '?v=20260418-v4')
+    navigator.serviceWorker.register(swPath + '?v=20260418-v5')
       .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }
