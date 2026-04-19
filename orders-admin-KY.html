@@ -1121,27 +1121,26 @@ async function doAdminLogin(){
 
   const fb = window._fb;
   if(!fb||!fb.ready){
-    // Firebase 미연결 시 localStorage amt_pw fallback
-    const localPw = {};
-    try{ Object.assign(localPw, JSON.parse(localStorage.getItem('amt_pw')||'{}')); }catch(e){}
-    const matched = Object.entries(localPw).find(([k,v]) => v === code);
-    if(matched){
-      setAdminSession(matched[0], code);
-      showAdminApp();
-      return;
-    }
-    setAdminMsg('❌ 코드가 틀렸습니다.');
+    setAdminMsg('❌ Firebase 미연결');
     return;
   }
 
   try{
-    const snap = await fb.get(fb.ref(fb.db,'amt_pw'));
+    // ★ amt_admins에서 코드 매칭 검색 (amt_pw는 더 이상 사용 안 함)
+    const snap = await fb.get(fb.ref(fb.db,'amt_admins'));
     if(!snap.exists()){ setAdminMsg('⚠️ 관리자 코드 미설정'); return; }
-    const pwData = snap.val();
-    // pwData: { "홍길동": "1234", "김철수": "5678", ... }
-    const matched = Object.entries(pwData).find(([name, pw]) => String(pw) === String(code));
+    const adminsData = snap.val();
+    // adminsData: { "key1": {email, name, code, role}, ... }
+    let matched = null;
+    for(const [key, adm] of Object.entries(adminsData||{})){
+      if(adm && String(adm.code||'') === String(code)){
+        matched = adm;
+        break;
+      }
+    }
     if(!matched){ setAdminMsg('❌ 코드가 틀렸습니다.'); return; }
-    setAdminSession(matched[0], code);
+    const displayName = matched.name || matched.email || '관리자';
+    setAdminSession(displayName, code);
     showAdminApp();
   }catch(e){
     setAdminMsg('❌ 오류: '+e.message);
@@ -1186,11 +1185,11 @@ function setAdminMsg(msg){ document.getElementById('adminLoginMsg').textContent 
    관리자 코드 / 대리점 코드 관리
 ═══════════════════════════════════════════════════════ */
 
-// ── 관리자 코드 관리 ──
+// ── 관리자 코드 관리 (amt_admins 단일 저장소 사용) ──
 async function loadAdminCodes(){
   const fb = window._fb;
   if(!fb||!fb.ready){ alert('Firebase 미연결'); return; }
-  const snap = await fb.get(fb.ref(fb.db,'amt_pw'));
+  const snap = await fb.get(fb.ref(fb.db,'amt_admins'));
   const data = snap.exists() ? snap.val() : {};
   renderAdminCodeList(data);
 }
@@ -1198,54 +1197,52 @@ async function loadAdminCodes(){
 function renderAdminCodeList(data){
   const wrap = document.getElementById('adminCodeListWrap');
   if(!wrap) return;
-  const entries = Object.entries(data);
+  // data: { "key1": {email, name, code, role}, ... }
+  const entries = Object.entries(data).filter(([_, adm]) => adm && adm.email);
   if(!entries.length){
     wrap.innerHTML = '<div style="font-size:.8rem;color:#888;padding:8px">등록된 관리자가 없습니다.</div>';
     return;
   }
-  wrap.innerHTML = entries.map(([name, code]) => `
-    <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
-      <span style="flex:1;font-weight:700;font-size:.88rem">${name}</span>
-      <input type="text" id="acode_${name}" value="${code}"
-        style="width:90px;padding:5px 8px;border:1.5px solid var(--border);border-radius:6px;font-family:monospace;font-size:.9rem;font-weight:700;text-align:center">
-      <button class="btn btn-primary btn-xs" onclick="saveOneAdminCode('${name}')">저장</button>
-      <button class="btn btn-danger btn-xs" onclick="deleteAdminCode('${name}')">삭제</button>
-    </div>
-  `).join('');
+  wrap.innerHTML = entries.map(([key, adm]) => {
+    const displayName = adm.name || adm.email;
+    const code = adm.code || '';
+    const isSuper = adm.role === 'super';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="flex:1">' +
+        '<div style="font-weight:700;font-size:.88rem">' + displayName + (isSuper?' <span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:6px;font-size:.65rem;font-weight:700">총괄</span>':'') + '</div>' +
+        '<div style="font-size:.7rem;color:#6b7280;font-family:monospace">' + adm.email + '</div>' +
+      '</div>' +
+      '<input type="text" id="acode_' + key + '" value="' + code + '" style="width:90px;padding:5px 8px;border:1.5px solid var(--border);border-radius:6px;font-family:monospace;font-size:.9rem;font-weight:700;text-align:center">' +
+      '<button class="btn btn-primary btn-xs" onclick="saveOneAdminCode(\'' + key + '\')">저장</button>' +
+      (isSuper ? '' : '<button class="btn btn-danger btn-xs" onclick="deleteAdminCode(\'' + key + '\')">삭제</button>') +
+    '</div>';
+  }).join('');
 }
 
-async function saveOneAdminCode(name){
+async function saveOneAdminCode(key){
   const fb = window._fb;
   if(!fb||!fb.ready){ alert('Firebase 미연결'); return; }
-  const newCode = (document.getElementById('acode_'+name).value||'').trim();
+  const newCode = (document.getElementById('acode_'+key).value||'').trim();
   if(!newCode){ alert('코드를 입력하세요'); return; }
 
-  // ★ 본인 코드 변경 감지
-  const mySessionName = sessionStorage.getItem(ADMIN_SESSION_KEY) || '';
-  const isMine = (mySessionName === name);
-
   try{
-    // amt_pw (주 저장소 - KY admin 로그인)
-    await fb.set(fb.ref(fb.db,'amt_pw/'+name), newCode);
+    // 기존 데이터 조회
+    const snap = await fb.get(fb.ref(fb.db,'amt_admins/'+key));
+    if(!snap.exists()){ alert('관리자를 찾을 수 없습니다'); return; }
+    const adm = snap.val();
+    const displayName = adm.name || adm.email;
 
-    // amt_admins에도 동기화 (AMT admin 호환용)
-    // 이름으로 amt_admins 전체 순회해서 매칭되는 항목 업데이트
-    try{
-      const snap = await fb.get(fb.ref(fb.db,'amt_admins'));
-      if(snap.exists()){
-        const data = snap.val();
-        for(const [key, adm] of Object.entries(data||{})){
-          if((adm.name||'') === name){
-            await fb.set(fb.ref(fb.db,'amt_admins/'+key+'/code'), newCode);
-            await fb.set(fb.ref(fb.db,'amt_admins/'+key+'/updatedAt'), new Date().toISOString());
-          }
-        }
-      }
-    }catch(e){ console.warn('amt_admins 동기화 실패', e); }
+    // 본인 코드 변경 감지
+    const mySessionName = sessionStorage.getItem(ADMIN_SESSION_KEY) || '';
+    const isMine = (mySessionName === displayName);
 
-    toast('✅ '+name+' 코드 저장됨 (즉시 적용)','success');
+    // amt_admins의 code, updatedAt만 업데이트
+    await fb.set(fb.ref(fb.db,'amt_admins/'+key+'/code'), newCode);
+    await fb.set(fb.ref(fb.db,'amt_admins/'+key+'/updatedAt'), new Date().toISOString());
 
-    // ★ 본인 코드 변경 시 강제 로그아웃
+    toast('✅ '+displayName+' 코드 저장됨 (즉시 적용)','success');
+
+    // 본인 코드 변경 시 강제 로그아웃
     if(isMine){
       setTimeout(()=>{
         alert('⚠️ 본인 코드가 변경되었습니다.\n보안상 로그아웃되며, 새 코드로 다시 로그인해야 합니다.');
@@ -1260,26 +1257,28 @@ async function saveOneAdminCode(name){
   }
 }
 
-async function deleteAdminCode(name){
-  if(!confirm(name+' 관리자를 삭제하시겠습니까?')) return;
+async function deleteAdminCode(key){
   const fb = window._fb;
   if(!fb||!fb.ready){ alert('Firebase 미연결'); return; }
-  await fb.set(fb.ref(fb.db,'amt_pw/'+name), null);
-  toast(name+' 삭제됨','info');
-  loadAdminCodes();
+  try{
+    const snap = await fb.get(fb.ref(fb.db,'amt_admins/'+key));
+    if(!snap.exists()){ alert('관리자를 찾을 수 없습니다'); return; }
+    const adm = snap.val();
+    if(adm.role === 'super'){ alert('총괄관리자는 삭제할 수 없습니다'); return; }
+    if(!confirm((adm.name||adm.email)+' 관리자를 삭제하시겠습니까?')) return;
+    await fb.set(fb.ref(fb.db,'amt_admins/'+key), null);
+    toast((adm.name||adm.email)+' 삭제됨','info');
+    loadAdminCodes();
+  }catch(e){
+    alert('삭제 실패: '+e.message);
+  }
 }
 
 async function addAdminCode(){
   const name = (document.getElementById('newAdminName').value||'').trim();
   const code = (document.getElementById('newAdminCode').value||'').trim();
   if(!name||!code){ alert('이름과 코드를 모두 입력하세요'); return; }
-  const fb = window._fb;
-  if(!fb||!fb.ready){ alert('Firebase 미연결'); return; }
-  await fb.set(fb.ref(fb.db,'amt_pw/'+name), code);
-  document.getElementById('newAdminName').value='';
-  document.getElementById('newAdminCode').value='';
-  toast('✅ '+name+' 추가됨','success');
-  loadAdminCodes();
+  alert('⚠️ 신규 관리자 추가는 AMT 관리자 앱(관리자 이메일/코드 관리)에서 진행하세요.\n(이메일 필드가 필요합니다)');
 }
 
 // ── 대리점 코드 관리 ──
@@ -1421,7 +1420,7 @@ function filterByDealer(name){
 window.addEventListener('DOMContentLoaded', async () => {
   // SW 등록 — github.io 배포환경에서만
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
-    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260419-v12')
+    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260419-v13')
       .then(r => console.log('[KY Admin SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY Admin SW] 등록 스킵:', e.message));
   }
@@ -1443,15 +1442,25 @@ window.addEventListener('DOMContentLoaded', async () => {
   const savedName = sessionStorage.getItem(ADMIN_SESSION_KEY);
   const savedCode = localStorage.getItem('ky_admin_saved_code') || '';
   if(savedName && savedCode){
-    // DB에서 현재 코드 확인
+    // amt_admins에서 name 매칭으로 조회 (amt_pw는 더 이상 사용 안 함)
     try{
       const fb = window._fb;
       if(fb && fb.ready){
-        const snap = await fb.get(fb.ref(fb.db,'amt_pw/'+savedName));
-        if(snap.exists() && String(snap.val()) === savedCode){
-          setAdminSession(savedName);
-          showAdminApp();
-          return;
+        const snap = await fb.get(fb.ref(fb.db,'amt_admins'));
+        if(snap.exists()){
+          const admins = snap.val() || {};
+          let matched = null;
+          for(const [key, adm] of Object.entries(admins)){
+            if(adm && (adm.name||adm.email) === savedName && String(adm.code||'') === savedCode){
+              matched = adm;
+              break;
+            }
+          }
+          if(matched){
+            setAdminSession(savedName);
+            showAdminApp();
+            return;
+          }
         }
       }
     }catch(e){ console.warn('자동로그인 코드 검증 실패', e); }

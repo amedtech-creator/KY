@@ -2392,7 +2392,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // (claude.ai, 로컬 등 다른 환경에서는 보안 정책상 등록 불가 → 무시)
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
     const swPath = '/KY/sw-KY.js';
-    navigator.serviceWorker.register(swPath + '?v=20260419-v12')
+    navigator.serviceWorker.register(swPath + '?v=20260419-v13')
       .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }

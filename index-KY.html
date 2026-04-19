@@ -137,14 +137,6 @@ async function verifyCodeInDb(email, code){
         return { ok:false, reason:'admin_code_mismatch' };
       }
     }catch(e){ console.warn('amt_admins 조회 실패', e); }
-    try{
-      const snap = await get(ref(db,'amt_pw'));
-      if(snap.exists()){
-        const pwMap = snap.val() || {};
-        const matched = Object.entries(pwMap).find(([name, pw]) => String(pw) === code);
-        if(matched) return { ok:true, role:ADMINS[email], name:matched[0], email };
-      }
-    }catch(e){ console.warn('amt_pw 조회 실패', e); }
     return { ok:false, reason:'admin_code_mismatch' };
   }
 
