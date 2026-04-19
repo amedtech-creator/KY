@@ -3,10 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <!-- ★ 외부 리소스 빠른 연결 (DNS/TLS 핸드셰이크 선행) -->
-  <link rel="preconnect" href="https://www.gstatic.com">
-  <link rel="preconnect" href="https://amt-ky-default-rtdb.asia-southeast1.firebasedatabase.app">
-  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
 <title>KY · 주문관리 (관리자)</title>
 <meta name="theme-color" content="#d97706">
 <meta name="mobile-web-app-capable" content="yes">
@@ -62,6 +58,7 @@
     firebaseReady = true;
     let _authInitialized = false;
     onAuthStateChanged(auth, (user) => {
+      console.log('[KY admin] Auth 상태:', user ? user.email : 'null');
       if(!_authInitialized){ _authInitialized = true; return; }
       if(!user){
         const sess = sessionStorage.getItem('ky_auth_session') || sessionStorage.getItem('amt_auth_session');
@@ -742,7 +739,7 @@ async function sendTelegramAdmin(chatId, text){
     });
     const data = await res.json();
     if(!data.ok) console.warn('[텔레그램-Admin] 발송 실패:', data.description);
-    else console.log('[텔레그램-Admin] 발송 성공');
+    else console.log('[텔레그램-Admin] 발송 완료');
   } catch(e){ console.warn('[텔레그램-Admin] 오류:', e.message); }
 }
 
@@ -1297,7 +1294,9 @@ function filterByDealer(name){
 window.addEventListener('DOMContentLoaded', () => {
   // SW 등록 — github.io 배포환경에서만
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
-    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260418-v10').catch(()=>{});
+    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260418-v10')
+      .then(r => console.log('[KY Admin SW] 등록 완료:', r.scope))
+      .catch(e => console.log('[KY Admin SW] 등록 스킵:', e.message));
   }
   // ★ index-ky.html Firebase Auth 세션 확인 (우선)
   // ★ index-ky.html 또는 index-amt.html Firebase Auth 세션 확인
