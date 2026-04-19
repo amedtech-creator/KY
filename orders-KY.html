@@ -22,8 +22,6 @@
   import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getDatabase, ref, set, get, push, onValue, off, serverTimestamp }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
-  import { getAuth, onAuthStateChanged, signOut }
-    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
   // ★ Firebase 설정 하드코딩 — 어느 기기에서든 자동 연결
   const DEFAULT_FB_CFG = {
@@ -52,7 +50,7 @@
       localStorage.setItem('ky_firebase_cfg', JSON.stringify(DEFAULT_FB_CFG));
   } catch(e){}
 
-  let app, db, auth, firebaseReady = false;
+  let app, db, firebaseReady = false;
   try {
     const appName = 'ky-order';
     app = getApps().find(a => a.name === appName)
@@ -63,29 +61,9 @@
               databaseURL: savedCfg.databaseURL
              }, appName);
     db = getDatabase(app);
-    auth = getAuth(app);
     firebaseReady = true;
   } catch(e){ console.warn('Firebase init failed', e); }
-  window._fb = { db, auth, ref, set, get, push, onValue, off, serverTimestamp, ready: firebaseReady };
-
-  // ★ Firebase Auth 상태 변화 감지 — 초기화 후 실제 로그아웃 시만 리다이렉트
-  if(auth){
-    let _authInitialized = false;
-    onAuthStateChanged(auth, (user) => {
-      console.log('[KY orders] Auth 상태:', user ? user.email : 'null');
-      if(!_authInitialized){ _authInitialized = true; return; }
-      if(!user){
-        const sess = sessionStorage.getItem('ky_auth_session');
-        if(!sess) return;
-        setTimeout(() => {
-          if(!auth.currentUser){
-            sessionStorage.removeItem('ky_auth_session');
-            location.replace('index-KY.html');
-          }
-        }, 1000);
-      }
-    });
-  }
+  window._fb = { db, ref, set, get, push, onValue, off, serverTimestamp, ready: firebaseReady };
 </script>
 
 <style>
@@ -1267,80 +1245,81 @@ function getKyAuthSession(){
   catch(e){ return null; }
 }
 
+// ★ 세션 이메일 + 저장된 코드를 DB에서 재검증 (코드 변경 시 차단 목적)
+async function revalidateDealerSession(email){
+  const fb = window._fb;
+  if(!fb || !fb.ready) return { ok:false, reason:'no_fb' };
+  const savedCode = localStorage.getItem('ky_saved_code') || '';
+  if(!savedCode) return { ok:false, reason:'no_saved_code' };
+  try{
+    const snap = await fb.get(fb.ref(fb.db,'amt_data/dealers'));
+    if(!snap.exists()) return { ok:false, reason:'no_dealers' };
+    const dealers = snap.val() || {};
+    const dealerList = Array.isArray(dealers) ? dealers : Object.values(dealers);
+    const dealer = dealerList.find(d => d && (d.email||'').toLowerCase() === (email||'').toLowerCase());
+    if(!dealer) return { ok:false, reason:'dealer_not_found' };
+    if(String(dealer.code||'') !== savedCode){
+      return { ok:false, reason:'code_changed' };
+    }
+    return { ok:true, dealer };
+  }catch(e){
+    return { ok:false, reason:'error', message:e.message };
+  }
+}
+
 async function doLogin(){
-  // ★ KY 대리점 로그인 - Auth 세션에서 dealer 정보 로드
+  // ★ 세션 기반 로그인 - index-KY.html에서 이메일+코드 검증 완료 후 세션 저장됨
   const sess = getKyAuthSession();
   console.log('[KY Login] 세션:', sess);
-  if(!sess || !sess.email){ toast('로그인 세션이 없습니다','error'); return; }
+  if(!sess || !sess.email){
+    toast('로그인 세션이 없습니다','error');
+    setTimeout(()=>location.replace('index-KY.html'), 1000);
+    return;
+  }
   showLoading();
   const fb = window._fb;
   console.log('[KY Login] Firebase 상태:', fb && fb.ready);
   if(!fb || !fb.ready){ hideLoading(); toast('Firebase 연결 오류','error'); return; }
 
-  // Firebase Auth 실제 로그인 상태 확인
-  const authUser = fb.auth && fb.auth.currentUser;
-  console.log('[KY Login] Auth User:', authUser ? authUser.email : 'null');
-  if(!authUser){
+  // ★ 코드 재검증 - 관리자가 코드를 바꿨으면 여기서 차단
+  const valid = await revalidateDealerSession(sess.email);
+  console.log('[KY Login] 재검증 결과:', valid);
+  if(!valid.ok){
     hideLoading();
-    toast('Firebase Auth 인증 없음 - 재로그인 필요','error');
+    // 세션 + 저장 코드 모두 제거 → 재로그인 유도
+    sessionStorage.removeItem('ky_auth_session');
+    localStorage.removeItem('ky_saved_code');
+    localStorage.removeItem('ky_autologin_ok');
+    if(valid.reason === 'code_changed'){
+      toast('⚠️ 코드번호가 변경됐습니다. 새 코드로 로그인하세요','error');
+    } else if(valid.reason === 'dealer_not_found'){
+      toast('❌ 등록된 대리점이 아닙니다','error');
+    } else {
+      toast('❌ 인증 실패: '+(valid.reason||''),'error');
+    }
     setTimeout(()=>location.replace('index-KY.html'), 1500);
     return;
   }
 
+  currentDealer = valid.dealer;
+  amtData = amtData || {};
+  // 전체 dealers도 한 번 조회해서 amtData에 넣어두기
   try{
-    console.log('[KY Login] amt_data/dealers 읽기 시도...');
     const snap = await fb.get(fb.ref(fb.db,'amt_data/dealers'));
-    console.log('[KY Login] snap.exists():', snap.exists());
-    if(!snap.exists()){ hideLoading(); toast('대리점 데이터 없음','error'); return; }
-    const dealers = snap.val() || {};
-    console.log('[KY Login] 대리점 수:', Object.keys(dealers).length);
-    amtData = amtData || {};
-    amtData.dealers = dealers;
-    // 이메일로 대리점 찾기
-    const dealer = Object.values(dealers).find(d => d && d.email === sess.email);
-    console.log('[KY Login] 매칭 대리점:', dealer ? dealer.name : '없음');
-    if(!dealer){ hideLoading(); toast('등록된 대리점이 아닙니다: '+sess.email,'error'); return; }
-    currentDealer = dealer;
-    // ★ Fix 4: 텔레그램 설정은 백그라운드 (로그인 블로킹 방지)
-    loadKyTelegramConfig().catch(()=>{});
-    hideLoading();
-    enterApp();
-  }catch(e){
-    console.error('[KY Login] 로드 실패:', e);
-    hideLoading();
-    toast('로드 실패: '+e.message,'error');
-  }
+    if(snap.exists()) amtData.dealers = snap.val();
+  }catch(e){}
+  loadKyTelegramConfig().catch(()=>{});
+  hideLoading();
+  enterApp();
 }
 
 function showLoginMsg(msg){ document.getElementById('loginMsg').textContent = msg; }
 
 async function tryAutoLogin(){
-  // ★ Auth 세션 기반 자동 로그인
+  // ★ 세션 기반 자동 로그인
   const sess = getKyAuthSession();
   console.log('[KY tryAutoLogin] 세션:', sess);
   if(!sess || !sess.email){ hideLoading(); return false; }
-
-  // Firebase Auth 준비를 기다림 (최대 3초)
-  const fb = window._fb;
-  if(fb && fb.auth){
-    console.log('[KY tryAutoLogin] Auth 상태 대기...');
-    await new Promise((resolve) => {
-      let done = false;
-      const timer = setTimeout(() => { if(!done){ done = true; resolve(); } }, 3000);
-      const unsub = fb.auth.onAuthStateChanged ?
-        fb.auth.onAuthStateChanged((user) => {
-          console.log('[KY tryAutoLogin] Auth 변화:', user ? user.email : 'null');
-          if(!done){
-            done = true;
-            clearTimeout(timer);
-            resolve();
-          }
-        }) : null;
-    });
-    console.log('[KY tryAutoLogin] 현재 Auth User:', fb.auth.currentUser ? fb.auth.currentUser.email : 'null');
-  }
-
-  // 세션 있으면 doLogin 호출
   await doLogin();
   return !!currentDealer;
 }
@@ -1349,10 +1328,14 @@ function doLogout(){
   if(!confirm('로그아웃 하시겠습니까?')) return;
   stopListeners();
   currentDealer = null;
+  // ★ 세션 + 자동로그인 키 모두 제거
+  sessionStorage.removeItem('ky_auth_session');
+  localStorage.removeItem('ky_saved_code');
+  localStorage.removeItem('ky_autologin_ok');
   localStorage.removeItem(LS_DEALER);
   cart = [];
-  document.getElementById('mainApp').style.display = 'none';
-  document.getElementById('loginScreen').style.display = 'flex';
+  // index-KY.html로 이동 → 재로그인
+  location.replace('index-KY.html');
 }
 
 /* ═══════════════════════════════════════════════════
@@ -1370,9 +1353,10 @@ async function enterApp(){
   checkFbStatus();
 
   // 데이터 로드는 병렬, 완료 후 재렌더
+  // ★ loadNotifications는 동기 함수 → Promise.resolve로 감싸서 에러 방지
   Promise.all([
     loadOrderHistory().catch(e => console.warn('주문내역:', e)),
-    loadNotifications().catch(e => console.warn('알림:', e))
+    Promise.resolve().then(() => loadNotifications()).catch(e => console.warn('알림:', e))
   ]).then(() => renderHome());
 
   try{ startListeners(); }catch(e){ console.warn('리스너:', e); }
@@ -2356,7 +2340,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // (claude.ai, 로컬 등 다른 환경에서는 보안 정책상 등록 불가 → 무시)
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
     const swPath = '/KY/sw-KY.js';
-    navigator.serviceWorker.register(swPath + '?v=20260418-v10')
+    navigator.serviceWorker.register(swPath + '?v=20260419-v11')
       .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }

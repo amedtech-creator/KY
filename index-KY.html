@@ -92,7 +92,6 @@
 
 <script type="module">
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { getDatabase, ref, get, set } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 const FB_CFG = {
@@ -106,75 +105,179 @@ const FB_CFG = {
 };
 
 const ADMINS      = { 'kyunghoyou@gmail.com':'super', 'amedtech@gmail.com':'admin' };
-const DEVICE_KEY  = 'ky_trusted_device';
 const SESSION_KEY = 'ky_auth_session';
 const SAVED_EMAIL = 'ky_saved_email';
-const SAVED_PW    = 'ky_saved_pw';
+const SAVED_CODE  = 'ky_saved_code';  // ★ 자동로그인용 저장 코드 (DB와 대조 검증)
+const AUTOLOGIN_KEY = 'ky_autologin_ok';  // ★ 자동로그인 동의 여부
 
 const app  = getApps().find(a=>a.name==='ky-order') || initializeApp(FB_CFG,'ky-order');
-const auth = getAuth(app);
 const db   = getDatabase(app);
 
-let _pendingEmail='', _pendingOtpCode='', _otpExpiry=0, _timerInterval=null;
+let _pendingEmail='', _pendingRole='', _pendingCode='', _pendingOtpCode='', _otpExpiry=0, _timerInterval=null;
 
-// ─── 저장된 이메일/비밀번호 자동입력 ──────────────────────
-(function restoreSaved(){
+// ─── 이메일 + 코드를 DB에서 검증 ──────────────────────────
+// 관리자: amt_admins (주 경로 - 이메일+코드) → fallback amt_pw (이름:코드 맵)
+// 대리점: amt_data/dealers[].email + .code 매칭
+async function verifyCredentials(email, code){
+  email = (email||'').toLowerCase().trim();
+  code = (code||'').trim();
+  if(!email || !code) return { ok:false, reason:'empty' };
+
+  // 1) 관리자 검증
+  if(ADMINS[email]){
+    // 1-a) amt_admins에서 이메일로 직접 찾기 (주 저장소)
+    try{
+      const key = btoa(email).replace(/[^a-zA-Z0-9]/g,'_');
+      const snap = await get(ref(db,'amt_admins/'+key));
+      if(snap.exists()){
+        const adm = snap.val();
+        if(String(adm.code||'') === code){
+          return { ok:true, role:adm.role||ADMINS[email], name:adm.name||'', email };
+        }
+        return { ok:false, reason:'admin_code_mismatch' };
+      }
+    }catch(e){ console.warn('amt_admins 조회 실패', e); }
+    // 1-b) fallback: amt_pw (기존 이름:코드 맵)
+    try{
+      const snap = await get(ref(db,'amt_pw'));
+      if(snap.exists()){
+        const pwMap = snap.val() || {};
+        const matched = Object.entries(pwMap).find(([name, pw]) => String(pw) === code);
+        if(matched) return { ok:true, role:ADMINS[email], name:matched[0], email };
+      }
+    }catch(e){ console.warn('amt_pw 조회 실패', e); }
+    return { ok:false, reason:'admin_code_mismatch' };
+  }
+
+  // 2) 대리점 검증 - amt_data/dealers에서 이메일+code 매칭
+  try{
+    const snap = await get(ref(db,'amt_data/dealers'));
+    if(!snap.exists()) return { ok:false, reason:'no_dealers' };
+    const dealers = snap.val() || [];
+    const dealerList = Array.isArray(dealers) ? dealers : Object.values(dealers);
+    const dealer = dealerList.find(d => d && (d.email||'').toLowerCase() === email);
+    if(!dealer) return { ok:false, reason:'email_not_found' };
+    if(String(dealer.code||'') !== code) return { ok:false, reason:'dealer_code_mismatch' };
+    return { ok:true, role:'dealer', dealer, email };
+  }catch(e){
+    console.warn('dealers 조회 실패', e);
+    return { ok:false, reason:'db_error', message:e.message };
+  }
+}
+
+// ─── 저장된 이메일 자동입력 + 자동로그인 시도 ────────────
+(async function restoreAndAutoLogin(){
   const em = localStorage.getItem(SAVED_EMAIL)||'';
   if(em) document.getElementById('email').value = em;
-  // 코드번호는 보안상 저장하지 않음 (자동 로그인은 DEVICE_KEY + Firebase Auth 세션으로 처리)
-})();
 
-// ─── Auth 상태 감지 ────────────────────────────────────────
-onAuthStateChanged(auth, async (user) => {
-  if(!user) return;
-  const role = ADMINS[user.email]; // admin/super 또는 undefined(대리점)
+  // 자동로그인 시도 (저장된 이메일 + 코드가 있고 동의했으면)
+  const savedCode = localStorage.getItem(SAVED_CODE)||'';
+  const autoOk = localStorage.getItem(AUTOLOGIN_KEY) === '1';
+  if(!em || !savedCode || !autoOk) return;
 
-  // 신뢰된 기기면 바로 이동
-  if(localStorage.getItem(DEVICE_KEY) === user.uid){
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify({email:user.email, role:role||'dealer', uid:user.uid}));
-    location.replace(role ? 'orders-admin-KY.html' : 'orders-KY.html');
+  // DB와 대조 — 코드가 일치하는 경우에만 자동로그인 진행
+  showMsg('loginMsg','🔐 자동 로그인 확인 중...','');
+  const res = await verifyCredentials(em, savedCode);
+  if(!res.ok){
+    // 저장된 코드가 서버 코드와 다름 → 자동로그인 취소, 저장 코드 삭제, 사용자가 직접 입력하도록
+    localStorage.removeItem(SAVED_CODE);
+    localStorage.removeItem(AUTOLOGIN_KEY);
+    showMsg('loginMsg','⚠️ 코드번호가 변경됐습니다. 새 코드를 입력하세요','error');
+    document.getElementById('pw').value = '';
+    document.getElementById('pw').focus();
     return;
   }
-  // 새 기기 → OTP 발송
-  await sendOtp(user.email, role);
-});
+  // 통과 → 바로 세션 저장 후 이동
+  const sess = { email:em, role:res.role, name:res.name||'', dealerId:res.dealer?.id||'' };
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify(sess));
+  showMsg('loginMsg','✅ 자동 로그인 완료! 이동 중...','success');
+  setTimeout(()=>{
+    location.replace(res.role==='dealer' ? 'orders-KY.html' : 'orders-admin-KY.html');
+  }, 300);
+})();
 
-// ─── 로그인 ───────────────────────────────────────────────
+// ─── 로그인 (이메일 + 코드) ──────────────────────────────
 window.doLogin = async () => {
   const email = document.getElementById('email').value.trim();
   const pw    = document.getElementById('pw').value.trim();
   if(!email||!pw){ showMsg('loginMsg','이메일과 코드번호를 입력하세요','error'); return; }
 
-  // ★ 로딩 시작
   const btn = document.getElementById('loginBtn');
   btn.classList.add('loading');
   btn.disabled = true;
   showMsg('loginMsg','🔐 인증 중...','');
 
-  try {
-    await signInWithEmailAndPassword(auth, email, pw);
-    showMsg('loginMsg','✅ 인증 성공! 이동 중...','success');
-  } catch(e){
+  const res = await verifyCredentials(email, pw);
+  if(!res.ok){
     btn.classList.remove('loading');
     btn.disabled = false;
-    const c=e.code||'';
-    if(c.includes('wrong-password')||c.includes('invalid-credential')) showMsg('loginMsg','❌ 코드번호가 틀립니다','error');
-    else if(c.includes('user-not-found')) showMsg('loginMsg','❌ 등록되지 않은 이메일입니다','error');
-    else if(c.includes('too-many-requests')) showMsg('loginMsg','⏳ 잠시 후 다시 시도하세요','error');
-    else showMsg('loginMsg','❌ 로그인 실패: '+e.message,'error');
+    let msg = '❌ 이메일 또는 코드번호가 틀립니다';
+    if(res.reason==='no_dealers') msg = '❌ 대리점 데이터 없음 - 관리자에게 문의';
+    if(res.reason==='db_error') msg = '❌ 서버 오류: '+(res.message||'');
+    showMsg('loginMsg', msg, 'error');
+    return;
   }
+
+  // 검증 통과 → OTP 단계로 (새 기기는 OTP, 이전에 이 기기에서 로그인한 이력이 있으면 건너뜀)
+  _pendingEmail = email.toLowerCase();
+  _pendingRole = res.role;
+  _pendingCode = pw;
+  _pendingDealerInfo = res.dealer || null;
+  _pendingAdminName = res.name || '';
+
+  // 이 기기에서 이 이메일로 과거에 OTP 인증을 완료한 적 있으면 바로 통과
+  const deviceOk = localStorage.getItem('ky_device_verified_'+btoa(email.toLowerCase()).replace(/=/g,'')) === '1';
+  if(deviceOk){
+    // 바로 통과
+    await finalizeLogin(false);
+    return;
+  }
+  // OTP 발송
+  await sendOtp(_pendingEmail, _pendingRole);
 };
+let _pendingDealerInfo = null;
+let _pendingAdminName = '';
+
+async function finalizeLogin(fromOtp){
+  // ★ 세션 저장
+  const sess = {
+    email: _pendingEmail,
+    role: _pendingRole,
+    name: _pendingAdminName,
+    dealerId: _pendingDealerInfo?.id || ''
+  };
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify(sess));
+
+  // ★ 이메일/코드 저장 (자동로그인 동의한 경우에만)
+  const remember = document.getElementById('rememberMe').checked;
+  if(remember){
+    localStorage.setItem(SAVED_EMAIL, _pendingEmail);
+    localStorage.setItem(SAVED_CODE, _pendingCode);
+    localStorage.setItem(AUTOLOGIN_KEY, '1');
+    if(fromOtp){
+      // OTP 통과한 기기는 "신뢰된 기기"로 마크 → 다음 로그인부턴 OTP 건너뜀
+      localStorage.setItem('ky_device_verified_'+btoa(_pendingEmail).replace(/=/g,''), '1');
+    }
+  } else {
+    localStorage.removeItem(SAVED_CODE);
+    localStorage.removeItem(AUTOLOGIN_KEY);
+  }
+
+  const msgId = fromOtp ? 'verifyMsg' : 'loginMsg';
+  showMsg(msgId, '✅ 인증 완료! 이동 중...', 'success');
+  setTimeout(()=>{
+    location.replace(_pendingRole==='dealer' ? 'orders-KY.html' : 'orders-admin-KY.html');
+  }, 500);
+}
 
 // ─── OTP 생성 및 발송 ─────────────────────────────────────
 async function sendOtp(email, role) {
-  // ★ 화면 즉시 전환 - 사용자에게 진행감 제공
   document.getElementById('loginBox').style.display  = 'none';
   document.getElementById('verifyBox').style.display = 'block';
   document.getElementById('otpInput').value = '';
   document.getElementById('verifyDesc').textContent = '📤 인증코드 발송 중...';
 
   const code = String(Math.floor(100000+Math.random()*900000));
-  _pendingEmail   = email;
   _pendingOtpCode = code;
   _otpExpiry      = Date.now() + 5*60*1000;
 
@@ -188,7 +291,7 @@ async function sendOtp(email, role) {
   try{
     const snap = await get(ref(db,'config/emailjs'));
     if(snap.exists()){
-      const cfg = snap.val(); // { serviceId, templateId, publicKey }
+      const cfg = snap.val();
       if(cfg.serviceId && cfg.templateId){
         if(cfg.publicKey) emailjs.init(cfg.publicKey);
         const res = await emailjs.send(cfg.serviceId, cfg.templateId, {
@@ -234,47 +337,70 @@ window.verifyOtp = async () => {
   }
 
   clearInterval(_timerInterval);
-  const user = auth.currentUser;
-
-  // 기기 신뢰 + 자동완성 저장
-  if(document.getElementById('rememberMe').checked){
-    localStorage.setItem(DEVICE_KEY, user.uid);
-    localStorage.setItem(SAVED_EMAIL, _pendingEmail);
-    // 코드번호(비밀번호)는 저장하지 않음 - Firebase Auth가 자동 로그인 유지
-  }
   set(ref(db,'amt_otp/'+btoa(_pendingEmail).replace(/=/g,'')),null).catch(()=>{});
-
-  const role = ADMINS[_pendingEmail]||'dealer';
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify({email:_pendingEmail, role, uid:user?.uid||''}));
-  showMsg('verifyMsg','✅ 인증 완료!','success');
-  setTimeout(()=>location.replace(role!=='dealer'?'orders-admin-KY.html':'orders-KY.html'), 700);
+  await finalizeLogin(true);
 };
 
-window.resendOtp = async ()=>{ if(_pendingEmail) await sendOtp(_pendingEmail, ADMINS[_pendingEmail]||'dealer'); };
+window.resendOtp = async ()=>{ if(_pendingEmail) await sendOtp(_pendingEmail, _pendingRole); };
 window.backToLogin = ()=>{
   clearInterval(_timerInterval);
   document.getElementById('loginBox').style.display  = 'block';
   document.getElementById('verifyBox').style.display = 'none';
   document.getElementById('otpInput').value = '';
-  auth.signOut();
+  const loginBtn = document.getElementById('loginBtn');
+  if(loginBtn){ loginBtn.classList.remove('loading'); loginBtn.disabled = false; }
 };
 
-// ─── 코드 잊어버린 경우 ───────────────────────────────────
+// ─── 코드 잊어버린 경우 - 텔레그램 + 관리자 앱 팝업 둘 다 ──
 window.forgotCode = async () => {
   const email = document.getElementById('email').value.trim();
   if(!email){ showMsg('loginMsg','이메일을 먼저 입력하세요','error'); return; }
+
+  const reqId = 'cr_' + Date.now();
+  const nowIso = new Date().toISOString();
+  let notifOk = false, telegramOk = false;
+
+  // 1) Firebase amt_notifications에 코드요청 알림 기록 (관리자 앱 팝업용)
+  try{
+    await set(ref(db,'amt_notifications/'+reqId), {
+      id: reqId,
+      type: 'code_request',   // ★ orders-admin-AMT의 리스너가 type 필드를 체크함
+      title: '🔑 코드번호 재설정 요청',
+      message: '[코드요청] '+email+' 계정 코드번호 재설정 요청',
+      email,
+      app: 'KY',
+      at: nowIso,
+      read: false
+    });
+    notifOk = true;
+  }catch(e){ console.warn('알림 저장 실패', e); }
+
+  // 2) 텔레그램 발송
   try{
     const snap = await get(ref(db,'config/telegram'));
     if(snap.exists()){
       const cfg = snap.val();
-      const text=`🔑 [코드요청] ${email} 계정 코드번호 재설정 요청`;
-      await fetch(`https://api.telegram.org/bot${cfg.superAdminToken}/sendMessage`,{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({chat_id:cfg.superAdminChatId,text})
-      });
+      const token = cfg.superAdminToken || cfg.botToken;
+      const chatId = cfg.superAdminChatId || cfg.chatId;
+      if(token && chatId){
+        const text = `🔑 [KY 코드요청] ${email}\n계정 코드번호 재설정 요청이 들어왔습니다.\n(${new Date().toLocaleString('ko-KR')})`;
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`,{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({chat_id:chatId,text})
+        });
+        telegramOk = res.ok;
+      }
     }
-    showMsg('loginMsg','관리자에게 알림을 보냈습니다. 연락을 기다리세요','success');
-  }catch(e){ showMsg('loginMsg','요청 실패. 관리자에게 직접 연락하세요','error'); }
+  }catch(e){ console.warn('텔레그램 실패', e); }
+
+  if(notifOk || telegramOk){
+    const parts = [];
+    if(notifOk) parts.push('관리자 앱');
+    if(telegramOk) parts.push('텔레그램');
+    showMsg('loginMsg','✅ '+parts.join('+')+'으로 알림 전송 완료','success');
+  } else {
+    showMsg('loginMsg','❌ 알림 전송 실패 - 관리자에게 직접 연락하세요','error');
+  }
 };
 
 function startOtpTimer(){

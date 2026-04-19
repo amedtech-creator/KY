@@ -459,7 +459,96 @@ function init(){
   }
   setSync(true, '연결됨');
   startListener();
+  startCodeRequestListener();  // ★ 코드 요청 알림 구독
 }
+
+// ★ 대리점에서 코드 요청이 오면 팝업 표시 (amt_notifications 구독)
+let _codeReqListener = null;
+let _codeReqFirstLoad = true;
+let _codeReqFirstLoadTime = null;
+function startCodeRequestListener(){
+  const fb = window._fb;
+  if(!fb || !fb.ready) return;
+  if(_codeReqListener) return;
+  _codeReqFirstLoadTime = new Date().toISOString();
+  _codeReqListener = fb.onValue(fb.ref(fb.db, 'amt_notifications'), (snap) => {
+    if(!snap.exists()) return;
+    const notifs = snap.val();
+    const codeReqs = Object.entries(notifs)
+      .map(([id, n]) => ({...n, _fbId:id}))
+      .filter(n => n && n.type === 'code_request' && !n.read);
+
+    if(_codeReqFirstLoad){
+      _codeReqFirstLoad = false;
+      // 첫 로드 시 가장 최근 1개만
+      const latest = [...codeReqs].sort((a,b) => String(b.at||'').localeCompare(String(a.at||'')))[0];
+      if(latest){
+        const key = 'ky_cr_shown_'+(latest._fbId||latest.at||'');
+        if(!sessionStorage.getItem(key)){
+          sessionStorage.setItem(key,'1');
+          showCodeRequestPopup(latest);
+        }
+      }
+      return;
+    }
+    // 이후엔 firstLoadTime 이후 생성된 새 알림만
+    const newOnes = codeReqs.filter(n => (n.at||'') > _codeReqFirstLoadTime);
+    newOnes.forEach(n => {
+      const key = 'ky_cr_shown_'+(n._fbId||n.at||'');
+      if(sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key,'1');
+      showCodeRequestPopup(n);
+    });
+  });
+}
+
+function showCodeRequestPopup(n){
+  const old = document.getElementById('kyCodeReqPopup');
+  if(old) old.remove();
+  const popup = document.createElement('div');
+  popup.id = 'kyCodeReqPopup';
+  popup.style.cssText = [
+    'position:fixed','top:50%','left:50%','transform:translate(-50%,-50%)','z-index:10000',
+    'background:#fff','border:3px solid var(--ky)','border-radius:16px',
+    'padding:24px','min-width:300px','max-width:420px',
+    'box-shadow:0 12px 40px rgba(217,119,6,.45)'
+  ].join(';');
+  popup.innerHTML = `
+    <div style="font-size:1.1rem;font-weight:800;color:var(--ky);margin-bottom:10px">🔑 대리점 코드 재설정 요청</div>
+    <div style="font-size:.92rem;color:var(--text);margin-bottom:14px;padding:10px;background:var(--ky-light);border-radius:8px">
+      ${(n.message||'').replace('[코드요청] ','') || ((n.email||'(이메일 불명)') + ' 계정 코드 요청')}
+    </div>
+    <div style="font-size:.72rem;color:var(--text3);margin-bottom:14px">
+      ${n.at ? new Date(n.at).toLocaleString('ko-KR') : ''}
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-ghost btn-sm" onclick="dismissCodeReqPopup('${n._fbId}', false)">닫기</button>
+      <button class="btn btn-ky btn-sm" onclick="dismissCodeReqPopup('${n._fbId}', true)">확인 처리</button>
+    </div>
+  `;
+  document.body.appendChild(popup);
+
+  // 브라우저 알림
+  if(Notification && Notification.permission === 'granted'){
+    new Notification('🔑 대리점 코드 요청', {
+      body: (n.message||'').replace('[코드요청] ','') || (n.email||'') + ' 계정',
+      icon: '/KY/icon-192.png', tag: 'code-req-'+(n._fbId||''), requireInteraction: true
+    });
+  }
+}
+
+window.dismissCodeReqPopup = async function(fbId, markRead){
+  const popup = document.getElementById('kyCodeReqPopup');
+  if(popup) popup.remove();
+  if(markRead && fbId){
+    try{
+      const fb = window._fb;
+      if(fb && fb.ready){
+        await fb.set(fb.ref(fb.db,'amt_notifications/'+fbId+'/read'), true);
+      }
+    }catch(e){}
+  }
+};
 
 function startListener(){
   const fb = window._fb;
@@ -1081,11 +1170,12 @@ function adminLogout(){
   if(!confirm('로그아웃 하시겠습니까?')) return;
   sessionStorage.removeItem(ADMIN_SESSION_KEY);
   window._adminName = null;
+  // ★ 저장된 코드도 제거 - 로그아웃 시 완전 초기화
+  localStorage.removeItem('ky_admin_saved_code');
+  localStorage.removeItem('ky_admin_saved_name');
   document.getElementById('adminMainApp').style.display = 'none';
   document.getElementById('adminLoginScreen').style.display = 'flex';
-  // ★ 로그아웃 후 자동 코드 유지
-  const savedCode = localStorage.getItem('ky_admin_saved_code') || '';
-  document.getElementById('adminCodeInput').value = savedCode;
+  document.getElementById('adminCodeInput').value = '';
   setAdminMsg('');
 }
 
@@ -1129,8 +1219,45 @@ async function saveOneAdminCode(name){
   if(!fb||!fb.ready){ alert('Firebase 미연결'); return; }
   const newCode = (document.getElementById('acode_'+name).value||'').trim();
   if(!newCode){ alert('코드를 입력하세요'); return; }
-  await fb.set(fb.ref(fb.db,'amt_pw/'+name), newCode);
-  toast('✅ '+name+' 코드 저장됨','success');
+
+  // ★ 본인 코드 변경 감지
+  const mySessionName = sessionStorage.getItem(ADMIN_SESSION_KEY) || '';
+  const isMine = (mySessionName === name);
+
+  try{
+    // amt_pw (주 저장소 - KY admin 로그인)
+    await fb.set(fb.ref(fb.db,'amt_pw/'+name), newCode);
+
+    // amt_admins에도 동기화 (AMT admin 호환용)
+    // 이름으로 amt_admins 전체 순회해서 매칭되는 항목 업데이트
+    try{
+      const snap = await fb.get(fb.ref(fb.db,'amt_admins'));
+      if(snap.exists()){
+        const data = snap.val();
+        for(const [key, adm] of Object.entries(data||{})){
+          if((adm.name||'') === name){
+            await fb.set(fb.ref(fb.db,'amt_admins/'+key+'/code'), newCode);
+            await fb.set(fb.ref(fb.db,'amt_admins/'+key+'/updatedAt'), new Date().toISOString());
+          }
+        }
+      }
+    }catch(e){ console.warn('amt_admins 동기화 실패', e); }
+
+    toast('✅ '+name+' 코드 저장됨 (즉시 적용)','success');
+
+    // ★ 본인 코드 변경 시 강제 로그아웃
+    if(isMine){
+      setTimeout(()=>{
+        alert('⚠️ 본인 코드가 변경되었습니다.\n보안상 로그아웃되며, 새 코드로 다시 로그인해야 합니다.');
+        sessionStorage.removeItem(ADMIN_SESSION_KEY);
+        localStorage.removeItem('ky_admin_saved_code');
+        localStorage.removeItem('ky_admin_saved_name');
+        location.reload();
+      }, 500);
+    }
+  }catch(e){
+    toast('❌ 저장 실패: '+e.message,'error');
+  }
 }
 
 async function deleteAdminCode(name){
@@ -1291,31 +1418,48 @@ function filterByDealer(name){
   }
 }
 
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
   // SW 등록 — github.io 배포환경에서만
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
-    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260418-v10')
+    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260419-v11')
       .then(r => console.log('[KY Admin SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY Admin SW] 등록 스킵:', e.message));
   }
-  // ★ index-ky.html Firebase Auth 세션 확인 (우선)
   // ★ index-ky.html 또는 index-amt.html Firebase Auth 세션 확인
   const authSession = sessionStorage.getItem('ky_auth_session') || sessionStorage.getItem('amt_auth_session');
   if(authSession){
     try{
-      const { email, role } = JSON.parse(authSession);
-      if(role === 'super' || role === 'admin'){
-        setAdminSession(email);
+      const parsed = JSON.parse(authSession);
+      if(parsed.role === 'super' || parsed.role === 'admin'){
+        // ★ index-*.html에서 이미 코드 검증 통과한 세션이므로 그대로 신뢰
+        const displayName = parsed.name || parsed.email || '관리자';
+        setAdminSession(displayName);
         showAdminApp();
         return;
       }
     }catch(e){}
   }
-  // 자체 세션 복원
-  const saved = sessionStorage.getItem(ADMIN_SESSION_KEY);
-  if(saved){
-    setAdminSession(saved);
-    showAdminApp();
+  // ★ 자체 세션 복원 - DB에서 코드가 아직 유효한지 재확인
+  const savedName = sessionStorage.getItem(ADMIN_SESSION_KEY);
+  const savedCode = localStorage.getItem('ky_admin_saved_code') || '';
+  if(savedName && savedCode){
+    // DB에서 현재 코드 확인
+    try{
+      const fb = window._fb;
+      if(fb && fb.ready){
+        const snap = await fb.get(fb.ref(fb.db,'amt_pw/'+savedName));
+        if(snap.exists() && String(snap.val()) === savedCode){
+          setAdminSession(savedName);
+          showAdminApp();
+          return;
+        }
+      }
+    }catch(e){ console.warn('자동로그인 코드 검증 실패', e); }
+    // 코드 변경됨 → 세션/저장코드 초기화
+    sessionStorage.removeItem(ADMIN_SESSION_KEY);
+    localStorage.removeItem('ky_admin_saved_code');
+    localStorage.removeItem('ky_admin_saved_name');
+    setAdminMsg('⚠️ 코드가 변경됐습니다. 새 코드로 로그인하세요.');
   }
 });
 </script>
