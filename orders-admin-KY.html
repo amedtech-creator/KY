@@ -1421,7 +1421,7 @@ function filterByDealer(name){
 window.addEventListener('DOMContentLoaded', async () => {
   // SW 등록 — github.io 배포환경에서만
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
-    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260419-v11')
+    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260419-v12')
       .then(r => console.log('[KY Admin SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY Admin SW] 등록 스킵:', e.message));
   }

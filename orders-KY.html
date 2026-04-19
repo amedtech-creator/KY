@@ -22,6 +22,8 @@
   import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getDatabase, ref, set, get, push, onValue, off, serverTimestamp }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+  import { getAuth, onAuthStateChanged, signOut }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
   // ★ Firebase 설정 하드코딩 — 어느 기기에서든 자동 연결
   const DEFAULT_FB_CFG = {
@@ -42,7 +44,6 @@
     else if(s2.projectId) savedCfg = s2;
   } catch(e){}
 
-  // localStorage에도 저장 (설정탭 표시용)
   try {
     if(!localStorage.getItem('amt_firebase_cfg'))
       localStorage.setItem('amt_firebase_cfg', JSON.stringify(DEFAULT_FB_CFG));
@@ -50,7 +51,7 @@
       localStorage.setItem('ky_firebase_cfg', JSON.stringify(DEFAULT_FB_CFG));
   } catch(e){}
 
-  let app, db, firebaseReady = false;
+  let app, db, auth, firebaseReady = false;
   try {
     const appName = 'ky-order';
     app = getApps().find(a => a.name === appName)
@@ -61,9 +62,28 @@
               databaseURL: savedCfg.databaseURL
              }, appName);
     db = getDatabase(app);
+    auth = getAuth(app);
     firebaseReady = true;
   } catch(e){ console.warn('Firebase init failed', e); }
-  window._fb = { db, ref, set, get, push, onValue, off, serverTimestamp, ready: firebaseReady };
+  window._fb = { db, auth, ref, set, get, push, onValue, off, serverTimestamp, signOut, ready: firebaseReady };
+
+  // ★ Auth 세션이 없어지면 로그인 페이지로 (index-KY에서 signOut했거나 세션 만료)
+  if(auth){
+    let _authInitialized = false;
+    onAuthStateChanged(auth, (user) => {
+      if(!_authInitialized){ _authInitialized = true; return; }
+      if(!user){
+        const sess = sessionStorage.getItem('ky_auth_session');
+        if(!sess) return;
+        setTimeout(() => {
+          if(!auth.currentUser){
+            sessionStorage.removeItem('ky_auth_session');
+            location.replace('index-KY.html');
+          }
+        }, 1000);
+      }
+    });
+  }
 </script>
 
 <style>
@@ -1278,18 +1298,28 @@ async function doLogin(){
   }
   showLoading();
   const fb = window._fb;
-  console.log('[KY Login] Firebase 상태:', fb && fb.ready);
   if(!fb || !fb.ready){ hideLoading(); toast('Firebase 연결 오류','error'); return; }
+
+  // ★ Auth 세션 확인 (DB 읽기 권한 필수)
+  const authUser = fb.auth && fb.auth.currentUser;
+  if(!authUser){
+    // Auth 만료 → 재로그인 필요
+    hideLoading();
+    sessionStorage.removeItem('ky_auth_session');
+    toast('⚠️ 인증 만료 - 재로그인 필요','error');
+    setTimeout(()=>location.replace('index-KY.html'), 1500);
+    return;
+  }
 
   // ★ 코드 재검증 - 관리자가 코드를 바꿨으면 여기서 차단
   const valid = await revalidateDealerSession(sess.email);
-  console.log('[KY Login] 재검증 결과:', valid);
+  console.log('[KY Login] 재검증:', valid);
   if(!valid.ok){
     hideLoading();
-    // 세션 + 저장 코드 모두 제거 → 재로그인 유도
     sessionStorage.removeItem('ky_auth_session');
     localStorage.removeItem('ky_saved_code');
     localStorage.removeItem('ky_autologin_ok');
+    await fb.signOut(fb.auth).catch(()=>{});
     if(valid.reason === 'code_changed'){
       toast('⚠️ 코드번호가 변경됐습니다. 새 코드로 로그인하세요','error');
     } else if(valid.reason === 'dealer_not_found'){
@@ -1303,7 +1333,6 @@ async function doLogin(){
 
   currentDealer = valid.dealer;
   amtData = amtData || {};
-  // 전체 dealers도 한 번 조회해서 amtData에 넣어두기
   try{
     const snap = await fb.get(fb.ref(fb.db,'amt_data/dealers'));
     if(snap.exists()) amtData.dealers = snap.val();
@@ -1316,10 +1345,31 @@ async function doLogin(){
 function showLoginMsg(msg){ document.getElementById('loginMsg').textContent = msg; }
 
 async function tryAutoLogin(){
-  // ★ 세션 기반 자동 로그인
+  // ★ 세션 + Auth 기반 자동 로그인
   const sess = getKyAuthSession();
   console.log('[KY tryAutoLogin] 세션:', sess);
   if(!sess || !sess.email){ hideLoading(); return false; }
+
+  // Auth 초기화 대기 (최대 3초) - Firebase가 세션 복원 중일 수 있음
+  const fb = window._fb;
+  if(fb && fb.auth){
+    await new Promise((resolve) => {
+      let done = false;
+      const timer = setTimeout(() => { if(!done){ done = true; resolve(); } }, 3000);
+      if(fb.auth.currentUser){ clearTimeout(timer); resolve(); return; }
+      // onAuthStateChanged가 import되어 있지 않을 수 있으니 polling
+      const poll = setInterval(() => {
+        if(fb.auth.currentUser && !done){
+          done = true;
+          clearInterval(poll);
+          clearTimeout(timer);
+          resolve();
+        }
+      }, 100);
+      setTimeout(() => clearInterval(poll), 3000);
+    });
+  }
+
   await doLogin();
   return !!currentDealer;
 }
@@ -1328,13 +1378,15 @@ function doLogout(){
   if(!confirm('로그아웃 하시겠습니까?')) return;
   stopListeners();
   currentDealer = null;
-  // ★ 세션 + 자동로그인 키 모두 제거
   sessionStorage.removeItem('ky_auth_session');
   localStorage.removeItem('ky_saved_code');
   localStorage.removeItem('ky_autologin_ok');
   localStorage.removeItem(LS_DEALER);
+  const fb = window._fb;
+  if(fb && fb.auth && fb.signOut){
+    fb.signOut(fb.auth).catch(()=>{});
+  }
   cart = [];
-  // index-KY.html로 이동 → 재로그인
   location.replace('index-KY.html');
 }
 
@@ -2340,7 +2392,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // (claude.ai, 로컬 등 다른 환경에서는 보안 정책상 등록 불가 → 무시)
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
     const swPath = '/KY/sw-KY.js';
-    navigator.serviceWorker.register(swPath + '?v=20260419-v11')
+    navigator.serviceWorker.register(swPath + '?v=20260419-v12')
       .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }
