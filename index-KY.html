@@ -201,10 +201,19 @@ async function verifyAndSignIn(email, code){
   if(!res.ok){
     localStorage.removeItem(SAVED_CODE);
     localStorage.removeItem(AUTOLOGIN_KEY);
-    let msg = '⚠️ 코드번호가 변경됐습니다. 새 코드를 입력하세요';
-    if(res.reason==='auth_legacy') msg = '⚠️ 관리자에게 문의 필요 (기존 Auth 계정)';
-    showMsg('loginMsg', msg, 'error');
+
+    // ★ Fix: 코드 변경된 경우 — 이메일은 유지하고 코드 입력창 비우고 포커스
+    // 기존 코드로 자동로그인 시도했으므로 새 코드 입력만 하면 바로 로그인 가능
     document.getElementById('pw').value = '';
+
+    if(res.reason === 'dealer_code_mismatch'){
+      showMsg('loginMsg','🔑 관리자가 코드를 변경했습니다. 새 코드를 입력하세요.','error');
+    } else if(res.reason === 'auth_legacy'){
+      showMsg('loginMsg','⚠️ 관리자에게 문의 필요 (기존 Auth 계정)','error');
+    } else {
+      showMsg('loginMsg','⚠️ 코드번호가 변경됐습니다. 새 코드를 입력하세요','error');
+    }
+    // 이메일은 이미 채워져 있으므로 코드 입력창으로 바로 포커스
     document.getElementById('pw').focus();
     return;
   }

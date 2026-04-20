@@ -1412,6 +1412,23 @@ async function enterApp(){
   ]).then(() => renderHome());
 
   try{ startListeners(); }catch(e){ console.warn('리스너:', e); }
+
+  // ★ Fix: 5분마다 코드 재검증 — 관리자가 코드 변경 시 강제 로그아웃
+  const sess = getKyAuthSession();
+  if(sess && sess.email){
+    setInterval(async () => {
+      const result = await revalidateDealerSession(sess.email).catch(() => ({ ok:true }));
+      if(!result.ok){
+        const fb = window._fb;
+        sessionStorage.removeItem('ky_auth_session');
+        localStorage.removeItem('ky_saved_code');
+        localStorage.removeItem('ky_autologin_ok');
+        if(fb) await fb.signOut(fb.auth).catch(()=>{});
+        alert('⚠️ 코드번호가 변경됐습니다. 새 코드로 다시 로그인해주세요.');
+        location.replace('index-KY.html');
+      }
+    }, 5 * 60 * 1000); // 5분
+  }
 }
 
 function updateHeaderDealer(){
