@@ -2414,6 +2414,16 @@ window.addEventListener('DOMContentLoaded', async () => {
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }
 
+  // ★ 총괄관리자의 "대리점 뷰 체험" 모드 감지 (AMT 앱에서 새 탭으로 진입)
+  const urlParams = new URLSearchParams(location.search);
+  const impersonateEmail = urlParams.get('impersonate');
+  const fromSuper = urlParams.get('from') === 'super';
+  if(impersonateEmail && fromSuper){
+    const ok = await tryImpersonateMode(impersonateEmail);
+    if(ok) return; // 가장 모드로 진입 성공 → 일반 자동로그인 스킵
+    // 실패 시 아래 일반 플로우로 폴백
+  }
+
   // 자동 로그인 시도 (ky_auth_session 세션 기반)
   const ok = await tryAutoLogin();
   if(!ok){
@@ -2425,6 +2435,104 @@ window.addEventListener('DOMContentLoaded', async () => {
     }, 500);
   }
 });
+
+/* ═══════════════════════════════════════════════════
+   ★ 총괄관리자 대리점 뷰 체험 (Impersonation)
+   - AMT 앱에서 orders-KY.html?impersonate=<email>&from=super 로 진입
+   - 보안: sessionStorage(탭별 분리)로 AMT 총괄 세션 존재 확인 불가하므로
+     대신 쿼리파라미터만으로 진입하되, 주문저장 등 쓰기 작업은 차단
+═══════════════════════════════════════════════════ */
+window._kyImpersonateMode = false;
+
+async function tryImpersonateMode(email){
+  try{
+    showLoading();
+    const fb = window._fb;
+    if(!fb || !fb.ready){
+      // Firebase 초기화 대기 (최대 3초)
+      await new Promise(resolve => {
+        const start = Date.now();
+        const poll = setInterval(() => {
+          if(window._fb && window._fb.ready){ clearInterval(poll); resolve(); }
+          else if(Date.now() - start > 3000){ clearInterval(poll); resolve(); }
+        }, 100);
+      });
+    }
+    const fb2 = window._fb;
+    if(!fb2 || !fb2.ready){
+      hideLoading();
+      alert('⚠️ Firebase 연결 실패 - 대리점 뷰를 열 수 없습니다');
+      return false;
+    }
+
+    // Auth 익명/기존 로그인 필요 (dealers 읽기 권한)
+    if(fb2.auth && !fb2.auth.currentUser){
+      hideLoading();
+      alert('⚠️ Firebase 인증이 필요합니다.\n\n먼저 대리점 계정으로 한 번 로그인한 뒤, 이 탭을 새로고침하거나,\nAMT 관리자 페이지에서 다시 "역할 전환"을 시도해주세요.');
+      return false;
+    }
+
+    // 대리점 정보 조회
+    const snap = await fb2.get(fb2.ref(fb2.db, 'amt_data/dealers'));
+    if(!snap.exists()){ hideLoading(); alert('대리점 데이터를 찾을 수 없습니다'); return false; }
+    const dealers = snap.val() || {};
+    const list = Array.isArray(dealers) ? dealers : Object.values(dealers);
+    const dealer = list.find(d => d && (d.email||'').toLowerCase() === email.toLowerCase());
+    if(!dealer){ hideLoading(); alert(`대리점 "${email}"을 찾을 수 없습니다`); return false; }
+
+    // 가장 모드 플래그 설정
+    window._kyImpersonateMode = true;
+    currentDealer = dealer;
+    amtData = amtData || {};
+    amtData.dealers = dealers;
+
+    // 일반 enterApp 호출 → UI 렌더
+    if(typeof loadKyTelegramConfig === 'function') loadKyTelegramConfig().catch(()=>{});
+    hideLoading();
+    if(typeof enterApp === 'function'){
+      enterApp();
+    }
+
+    // 가장 모드 배너 + 쓰기 차단 적용
+    setTimeout(showImpersonateBanner, 200);
+    setTimeout(blockWriteActionsInImpersonate, 400);
+
+    return true;
+  }catch(e){
+    hideLoading();
+    console.error('Impersonate 실패:', e);
+    alert('가장 모드 진입 실패: ' + e.message);
+    return false;
+  }
+}
+
+function showImpersonateBanner(){
+  if(document.getElementById('kyImpersonateBanner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'kyImpersonateBanner';
+  banner.style.cssText = 'position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#fbbf24,#f59e0b);color:#422006;padding:10px 14px;text-align:center;font-size:.82rem;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.1);display:flex;justify-content:center;align-items:center;gap:12px;flex-wrap:wrap';
+  const name = (currentDealer && currentDealer.name) || '대리점';
+  banner.innerHTML = `⚠️ <span>총괄관리자 - "${name}" 뷰 체험 중 (읽기 전용)</span> <button onclick="window.close()" style="background:#422006;color:#fff;border:none;padding:4px 12px;border-radius:6px;font-size:.75rem;font-weight:700;cursor:pointer">✕ 탭 닫기</button>`;
+  document.body.insertBefore(banner, document.body.firstChild);
+}
+
+function blockWriteActionsInImpersonate(){
+  // 주문 저장 / 주문 취소 등 쓰기 함수를 래핑해서 차단
+  const blockedMsg = '🔒 대리점 뷰 체험 모드에서는 주문 저장/변경이 차단됩니다';
+
+  // submitOrder 계열
+  ['submitOrder','saveOrder','placeOrder','confirmOrder','cancelOrder','editOrder','saveEditOrder']
+    .forEach(fn => {
+      if(typeof window[fn] === 'function'){
+        const orig = window[fn];
+        window[fn] = function(...args){
+          alert(blockedMsg);
+          console.log('[Impersonate] 차단된 호출:', fn, args);
+          return;
+        };
+      }
+    });
+}
 </script>
 </body>
 </html>
