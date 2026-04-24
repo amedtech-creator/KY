@@ -1,12 +1,12 @@
 {
-  "name": "AMT 관리시스템",
-  "short_name": "AMT",
-  "description": "AMT·KY 통합 관리 시스템",
-  "start_url": "./index-AMT.html",
+  "name": "KY 주문시스템",
+  "short_name": "KY",
+  "description": "㈜케이와이메디칼 대리점 주문 시스템",
+  "start_url": "./index-KY.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f0f4ff",
-  "theme_color": "#1a73e8",
+  "background_color": "#fffbeb",
+  "theme_color": "#d97706",
   "orientation": "portrait-primary",
   "icons": [
     {
