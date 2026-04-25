@@ -1272,7 +1272,8 @@ function getKyAuthSession(){
 async function revalidateDealerSession(email){
   const fb = window._fb;
   if(!fb || !fb.ready) return { ok:false, reason:'no_fb' };
-  const savedCode = localStorage.getItem('ky_saved_code') || '';
+  // ★ "기억하기" 체크 안 한 경우 localStorage가 비어있으므로 sessionStorage도 확인
+  const savedCode = localStorage.getItem('ky_saved_code') || sessionStorage.getItem('ky_saved_code') || '';
   if(!savedCode) return { ok:false, reason:'no_saved_code' };
   try{
     const snap = await fb.get(fb.ref(fb.db,'amt_data/dealers'));
@@ -1320,6 +1321,7 @@ async function doLogin(){
   if(!valid.ok){
     hideLoading();
     sessionStorage.removeItem('ky_auth_session');
+    sessionStorage.removeItem('ky_saved_code');
     localStorage.removeItem('ky_saved_code');
     localStorage.removeItem('ky_autologin_ok');
     await fb.signOut(fb.auth).catch(()=>{});
