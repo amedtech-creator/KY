@@ -803,7 +803,9 @@ let ADMIN_TELEGRAM_BOT_TOKEN = '';
 let ADMIN_SUPER_CHAT_ID = '';
 let ADMIN1_BOT_TOKEN_KY = '';
 let ADMIN1_CHAT_ID_KY = '';
-// 나중에 추가할 관리자 채팅 ID
+let ADMIN2_BOT_TOKEN_KY = '';
+let ADMIN2_CHAT_ID_KY = '';
+// ★ admin1, admin2 모두 등록 (이전에 admin1만 등록되어 있던 버그 수정)
 
 
 async function loadAdminTelegramConfig(){
@@ -817,6 +819,8 @@ async function loadAdminTelegramConfig(){
     ADMIN_SUPER_CHAT_ID      = cfg.superAdminChatId || '';
     ADMIN1_BOT_TOKEN_KY      = cfg.admin1Token      || '';
     ADMIN1_CHAT_ID_KY        = cfg.admin1ChatId     || '';
+    ADMIN2_BOT_TOKEN_KY      = cfg.admin2Token      || '';
+    ADMIN2_CHAT_ID_KY        = cfg.admin2ChatId     || '';
   }catch(e){}
 }
 
@@ -826,7 +830,15 @@ async function sendTelegramAdmin(chatId, text){
     return;
   }
   try{
-    const res = await fetch((chatId===ADMIN1_CHAT_ID_KY&&ADMIN1_BOT_TOKEN_KY?'https://api.telegram.org/bot'+ADMIN1_BOT_TOKEN_KY:ADMIN_TELEGRAM_BOT_TOKEN?'https://api.telegram.org/bot'+ADMIN_TELEGRAM_BOT_TOKEN:null)+'/sendMessage', {
+    // ★ chatId에 따라 적절한 봇 토큰 선택 (admin1, admin2, 총괄 각자 다른 봇 사용)
+    let botToken = ADMIN_TELEGRAM_BOT_TOKEN; // 기본: 총괄 봇
+    if(chatId === ADMIN1_CHAT_ID_KY && ADMIN1_BOT_TOKEN_KY) botToken = ADMIN1_BOT_TOKEN_KY;
+    else if(chatId === ADMIN2_CHAT_ID_KY && ADMIN2_BOT_TOKEN_KY) botToken = ADMIN2_BOT_TOKEN_KY;
+    if(!botToken){
+      console.warn('[텔레그램-Admin] 봇 토큰 없음 → chatId:', chatId);
+      return;
+    }
+    const res = await fetch('https://api.telegram.org/bot' + botToken + '/sendMessage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'HTML' })
@@ -837,7 +849,7 @@ async function sendTelegramAdmin(chatId, text){
   } catch(e){ console.warn('[텔레그램-Admin] 오류:', e.message); }
 }
 
-/* 주문 상태변경 → 총관리자 텔레그램 */
+/* 주문 상태변경 → 모든 관리자 텔레그램 (총괄 + admin1 + admin2) */
 async function sendTelegramStatus(order, targetStatus, note, nowIso){
   const statusEmoji = {accepted:'✅', shipped:'🚚', pending:'⏳'};
   const statusLabel = {accepted:'접수완료', shipped:'출고완료', pending:'대기중'};
@@ -861,7 +873,11 @@ async function sendTelegramStatus(order, targetStatus, note, nowIso){
     note ? '📝 메모: ' + note : '',
     '🕐 처리: ' + nowStr + ' / ' + (window._adminName||'─')
   ]).filter(function(l){ return l !== undefined; });
-  await sendTelegramAdmin(ADMIN_SUPER_CHAT_ID, lines.join('\n'));
+  const text = lines.join('\n');
+  // ★ 총괄, admin1, admin2 모두에게 발송 (이전엔 총괄에게만 발송하던 버그 수정)
+  if(ADMIN_SUPER_CHAT_ID) await sendTelegramAdmin(ADMIN_SUPER_CHAT_ID, text);
+  if(ADMIN1_CHAT_ID_KY) await sendTelegramAdmin(ADMIN1_CHAT_ID_KY, text).catch(()=>{});
+  if(ADMIN2_CHAT_ID_KY) await sendTelegramAdmin(ADMIN2_CHAT_ID_KY, text).catch(()=>{});
 }
 
 /* ═══════════════════════════════════════════════
