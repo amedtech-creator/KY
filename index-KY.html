@@ -157,9 +157,19 @@ async function verifyCodeInDb(email, code){
     if(!snap.exists()) return { ok:false, reason:'no_dealers' };
     const dealers = snap.val() || [];
     const dealerList = Array.isArray(dealers) ? dealers : Object.values(dealers);
-    const dealer = dealerList.find(d => d && (d.email||'').toLowerCase() === email);
-    if(!dealer) return { ok:false, reason:'email_not_found' };
-    if(String(dealer.code||'') !== code) return { ok:false, reason:'dealer_code_mismatch' };
+    // ★ 같은 이메일을 가진 대리점이 여러 개일 수 있으므로 모두 찾음
+    const emailMatches = dealerList.filter(d => d && (d.email||'').toLowerCase() === email);
+    if(emailMatches.length === 0) return { ok:false, reason:'email_not_found' };
+    // ★ 이메일+코드 조합으로 정확한 dealer 찾기 (중복 이메일 안전)
+    const dealer = emailMatches.find(d => String(d.code||'') === code);
+    if(!dealer){
+      // 이메일은 일치하나 코드 불일치 - 같은 이메일 다중 대리점 케이스도 포함
+      if(emailMatches.length > 1){
+        console.warn('[로그인] 같은 이메일을 가진 대리점 ' + emailMatches.length + '개 발견했으나 코드 일치하는 대리점 없음:',
+          emailMatches.map(d => `${d.name}(code=${d.code})`).join(', '));
+      }
+      return { ok:false, reason:'dealer_code_mismatch' };
+    }
     return { ok:true, role:'dealer', dealer, email };
   }catch(e){
     return { ok:false, reason:'db_error', message:e.message };

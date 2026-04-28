@@ -1280,9 +1280,17 @@ async function revalidateDealerSession(email){
     if(!snap.exists()) return { ok:false, reason:'no_dealers' };
     const dealers = snap.val() || {};
     const dealerList = Array.isArray(dealers) ? dealers : Object.values(dealers);
-    const dealer = dealerList.find(d => d && (d.email||'').toLowerCase() === (email||'').toLowerCase());
-    if(!dealer) return { ok:false, reason:'dealer_not_found' };
-    if(String(dealer.code||'') !== savedCode){
+    // ★ 같은 이메일을 가진 대리점이 여러 개일 수 있으므로 모두 찾음
+    const emailLower = (email||'').toLowerCase();
+    const emailMatches = dealerList.filter(d => d && (d.email||'').toLowerCase() === emailLower);
+    if(emailMatches.length === 0) return { ok:false, reason:'dealer_not_found' };
+    // ★ 이메일+코드 조합으로 정확한 dealer 찾기 (중복 이메일 안전)
+    const dealer = emailMatches.find(d => String(d.code||'') === savedCode);
+    if(!dealer){
+      if(emailMatches.length > 1){
+        console.warn('[세션재검증] 같은 이메일 다중 대리점 ' + emailMatches.length + '개 발견, 코드 일치 없음:',
+          emailMatches.map(d => `${d.name}(code=${d.code})`).join(', '));
+      }
       return { ok:false, reason:'code_changed' };
     }
     return { ok:true, dealer };
@@ -2422,9 +2430,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   // ★ 총괄관리자의 "대리점 뷰 체험" 모드 감지 (AMT 앱에서 새 탭으로 진입)
   const urlParams = new URLSearchParams(location.search);
   const impersonateEmail = urlParams.get('impersonate');
+  const impersonateDealerId = urlParams.get('dealerId'); // ★ 신규: dealerId 우선 사용 (이메일 충돌 안전)
   const fromSuper = urlParams.get('from') === 'super';
   if(impersonateEmail && fromSuper){
-    const ok = await tryImpersonateMode(impersonateEmail);
+    const ok = await tryImpersonateMode(impersonateEmail, impersonateDealerId);
     if(ok) return; // 가장 모드로 진입 성공 → 일반 자동로그인 스킵
     // 실패 시 아래 일반 플로우로 폴백
   }
@@ -2449,7 +2458,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 ═══════════════════════════════════════════════════ */
 window._kyImpersonateMode = false;
 
-async function tryImpersonateMode(email){
+async function tryImpersonateMode(email, dealerId){
   try{
     showLoading();
     const fb = window._fb;
@@ -2482,7 +2491,29 @@ async function tryImpersonateMode(email){
     if(!snap.exists()){ hideLoading(); alert('대리점 데이터를 찾을 수 없습니다'); return false; }
     const dealers = snap.val() || {};
     const list = Array.isArray(dealers) ? dealers : Object.values(dealers);
-    const dealer = list.find(d => d && (d.email||'').toLowerCase() === email.toLowerCase());
+    // ★ dealerId가 전달되었으면 ID로 정확히 매칭 (이메일 중복 안전)
+    let dealer = null;
+    if(dealerId){
+      dealer = list.find(d => d && d.id === dealerId);
+      if(!dealer){
+        console.warn('[Impersonate] dealerId로 매칭 실패, 이메일로 fallback:', dealerId);
+      }
+    }
+    // fallback: 이메일로 매칭 (단, 다중 매칭 시 경고)
+    if(!dealer){
+      const emailLower = email.toLowerCase();
+      const emailMatches = list.filter(d => d && (d.email||'').toLowerCase() === emailLower);
+      if(emailMatches.length === 0){
+        hideLoading();
+        alert(`대리점 "${email}"을 찾을 수 없습니다`);
+        return false;
+      }
+      if(emailMatches.length > 1){
+        console.warn('[Impersonate] 같은 이메일을 가진 대리점이 ' + emailMatches.length + '개 있어 첫 번째 사용:',
+          emailMatches.map(d => `${d.name}(id=${d.id})`).join(', '));
+      }
+      dealer = emailMatches[0];
+    }
     if(!dealer){ hideLoading(); alert(`대리점 "${email}"을 찾을 수 없습니다`); return false; }
 
     // 가장 모드 플래그 설정
