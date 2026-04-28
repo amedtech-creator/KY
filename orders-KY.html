@@ -1204,8 +1204,13 @@ async function loadKyTelegramConfig(){
     KY_BOT_TOKEN = cfg.superAdminToken || '';
     KY_SUPER_ADMIN_CHAT_ID_LOADED = cfg.superAdminChatId || '';
     KY_NORMAL_ADMIN_TELEGRAMS = [];
+    // ★ admin1 등록
     if(cfg.admin1Token && cfg.admin1ChatId){
-      KY_NORMAL_ADMIN_TELEGRAMS.push({name:'강승섭', token:cfg.admin1Token, chatId:cfg.admin1ChatId});
+      KY_NORMAL_ADMIN_TELEGRAMS.push({name:'admin1', token:cfg.admin1Token, chatId:cfg.admin1ChatId});
+    }
+    // ★ admin2 등록 (이전에 누락되어 있었음 - KY 앱이 일반관리자 1명에게만 알림 보내는 버그 수정)
+    if(cfg.admin2Token && cfg.admin2ChatId){
+      KY_NORMAL_ADMIN_TELEGRAMS.push({name:'admin2', token:cfg.admin2Token, chatId:cfg.admin2ChatId});
     }
   }catch(e){ console.warn('KY 텔레그램 설정 로드 실패',e); }
 }
