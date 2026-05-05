@@ -23,7 +23,7 @@
 <!-- Firebase SDK -->
 <script type="module">
   import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getDatabase, ref, set, get, push, onValue, off, serverTimestamp }
+  import { getDatabase, ref, set, get, push, onValue, off, serverTimestamp, query, orderByChild, equalTo }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
   import { getAuth, onAuthStateChanged, signOut }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
@@ -68,7 +68,7 @@
     auth = getAuth(app);
     firebaseReady = true;
   } catch(e){ console.warn('Firebase init failed', e); }
-  window._fb = { db, auth, ref, set, get, push, onValue, off, serverTimestamp, signOut, ready: firebaseReady };
+  window._fb = { db, auth, ref, set, get, push, onValue, off, serverTimestamp, signOut, query, orderByChild, equalTo, ready: firebaseReady };
 
   // ★ Auth 세션이 없어지면 로그인 페이지로 (index-KY에서 signOut했거나 세션 만료)
   if(auth){
@@ -1056,6 +1056,12 @@ let notifications = [];     // local notification log
 let _orderListener = null;
 let _dataListener = null;
 let _metaListener = null;
+// ★ Fix: stopListeners 경로 불일치 방지 — 등록 시 사용한 ref/query 객체와 unsubscribe 함수 보관
+let _orderListenerRef = null;
+let _dataListenerRef = null;
+let _metaListenerRef = null;
+// ★ Fix: 5분 코드 재검증 setInterval ID 저장 (메모리 누수 방지)
+let _revalidateIntervalId = null;
 let _historyRefreshTimer = null;
 let _detailOrderId = null;
 const currentOrderType = 'order';  // ★ 반품/교환 제거 — 항상 일반주문
@@ -1073,6 +1079,13 @@ function fmt(n){ return Number(n||0).toLocaleString('ko-KR'); }
 function today(){ return new Date().toISOString().slice(0,10); }
 function ym(d){ return (d||'').slice(0,7); }
 function genId(){ return 'ko_'+Date.now()+'_'+Math.random().toString(36).slice(2,7); }
+// ★ XSS 방지: 사용자 입력을 HTML에 삽입할 때 escape
+function escHtml(s){
+  if(s == null) return '';
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 function kyOrderSortStamp(order){ return order?.updatedAt || order?.statusUpdatedAt || order?.createdAt || ''; }
 function sortKyOrdersDesc(list){
   return [...(list||[])].sort((a,b) => kyOrderSortStamp(b).localeCompare(kyOrderSortStamp(a)) || (b.orderDate||'').localeCompare(a.orderDate||''));
@@ -1432,12 +1445,15 @@ async function enterApp(){
   try{ startListeners(); }catch(e){ console.warn('리스너:', e); }
 
   // ★ Fix: 5분마다 코드 재검증 — 관리자가 코드 변경 시 강제 로그아웃
+  // 이전 인터벌이 살아있으면 먼저 정리 (enterApp이 여러 번 호출될 때 중복 방지)
+  if(_revalidateIntervalId){ clearInterval(_revalidateIntervalId); _revalidateIntervalId = null; }
   const sess = getKyAuthSession();
   if(sess && sess.email){
-    setInterval(async () => {
+    _revalidateIntervalId = setInterval(async () => {
       const result = await revalidateDealerSession(sess.email).catch(() => ({ ok:true }));
       if(!result.ok){
         const fb = window._fb;
+        if(_revalidateIntervalId){ clearInterval(_revalidateIntervalId); _revalidateIntervalId = null; }
         sessionStorage.removeItem('ky_auth_session');
         localStorage.removeItem('ky_saved_code');
         localStorage.removeItem('ky_autologin_ok');
@@ -1513,9 +1529,13 @@ function loadProductGrid(){
 
   const html = dealerProducts.map(p => {
     const isSelected = cart.some(c => c.product === p.product);
-    return `<div class="product-card ${isSelected?'selected':''}" onclick="toggleProduct('${p.product}', ${p.price})" id="pc_${p.product.replace(/\s/g,'_')}">
+    // ★ XSS 방지: 제품명 escape, JS 문자열 리터럴은 JSON.stringify로 안전하게
+    const prodEsc = escHtml(p.product);
+    const prodArg = JSON.stringify(p.product);
+    const idSafe = String(p.product).replace(/[^a-zA-Z0-9가-힣]/g,'_');
+    return `<div class="product-card ${isSelected?'selected':''}" onclick="toggleProduct(${prodArg}, ${p.price})" id="pc_${idSafe}">
       <div class="product-check">✓</div>
-      <div class="product-name">${p.product}</div>
+      <div class="product-name">${prodEsc}</div>
       <div class="product-price">${fmt(p.price)}원</div>
     </div>`;
   }).join('');
@@ -1609,7 +1629,7 @@ function renderCartItems(){
     <div class="cart-item">
       <div class="cart-item-icon">${icons[item.product]||'📦'}</div>
       <div class="cart-item-info">
-        <div class="cart-item-name">${item.product}</div>
+        <div class="cart-item-name">${escHtml(item.product)}</div>
         <div class="cart-item-price">${fmt(item.price)}원 × <span id="qtyDisp_${idx}">${item.qty.toLocaleString('ko-KR')}</span>개 = <b style="color:var(--ky)">${fmt(item.price*item.qty)}원</b></div>
       </div>
       <div class="cart-qty">
@@ -1691,7 +1711,7 @@ function renderConfirm(){
   const memo = document.getElementById('orderMemo').value;
   const rows = cart.map(c =>
     `<div class="confirm-row">
-      <span class="confirm-row-label">${c.product}</span>
+      <span class="confirm-row-label">${escHtml(c.product)}</span>
       <span class="confirm-row-value">${fmt(c.qty)}개 × ${fmt(c.price)}원 = <b style="color:var(--ky)">${fmt(c.qty*c.price)}원</b></span>
     </div>`
   ).join('');
@@ -1699,14 +1719,14 @@ function renderConfirm(){
   document.getElementById('confirmDetails').innerHTML = `
     <div class="confirm-row">
       <span class="confirm-row-label">대리점</span>
-      <span class="confirm-row-value">${currentDealer.name}</span>
+      <span class="confirm-row-value">${escHtml(currentDealer.name)}</span>
     </div>
     <div class="confirm-row">
       <span class="confirm-row-label">주문일</span>
       <span class="confirm-row-value">${today()}</span>
     </div>
     ${rows}
-    ${memo ? `<div class="confirm-row"><span class="confirm-row-label">메모</span><span class="confirm-row-value" style="font-size:.8rem">${memo}</span></div>` : ''}
+    ${memo ? `<div class="confirm-row"><span class="confirm-row-label">메모</span><span class="confirm-row-value" style="font-size:.8rem">${escHtml(memo)}</span></div>` : ''}
     <div class="confirm-row" style="border-top:2px solid var(--border2);margin-top:4px;padding-top:12px">
       <span class="confirm-row-label" style="font-weight:800">합계</span>
       <span class="confirm-row-value" style="font-size:1.2rem;color:var(--ky);font-weight:900">${fmt(subtotal)}원</span>
@@ -1945,13 +1965,14 @@ function orderItemHTML(o){
     accepted: {label:'처리중', cls:'status-pending'},
     rejected: {label:'거절됨', cls:'status-rejected'},
     shipped:  {label:'출고완료', cls:'status-shipped'},
-    
+    received: {label:'반품완료', cls:'status-shipped'},
     cancelled:{label:'취소됨', cls:'status-rejected'}
   };
   const s = statusMap[o.status] || {label:o.status, cls:'status-pending'};
-  const itemsText = (o.items||[]).map(i => `${i.product} ${fmt(i.qty)}개`).join(' · ');
+  const itemsText = (o.items||[]).map(i => `${escHtml(i.product)} ${fmt(i.qty)}개`).join(' · ');
+  const orderTypeMap = { return: '반품', exchange: '교환' };
   const typeBadge = o.orderType && o.orderType !== 'order'
-    ? `<span style="background:${o.orderType==='return'?'#fef3c7':'#eff6ff'};color:${o.orderType==='return'?'#92400e':'#1e40af'};padding:1px 7px;border-radius:10px;font-size:.63rem;font-weight:700;margin-left:6px">${orderTypeMap[o.orderType]||o.orderType}</span>` : '';
+    ? `<span style="background:${o.orderType==='return'?'#fef3c7':'#eff6ff'};color:${o.orderType==='return'?'#92400e':'#1e40af'};padding:1px 7px;border-radius:10px;font-size:.63rem;font-weight:700;margin-left:6px">${orderTypeMap[o.orderType]||escHtml(o.orderType)}</span>` : '';
 
   // ★ pending 상태이고 24시간 이내인 경우만 수정/취소 버튼 활성화
   const canModify = o.status === 'pending' && isWithin24h(o.createdAt);
@@ -1985,13 +2006,13 @@ function openOrderDetail(id){
     accepted: {label:'처리중 ⏳', cls:'status-pending'},
     rejected: {label:'거절됨 ❌', cls:'status-rejected'},
     shipped:  {label:'출고완료 🚚', cls:'status-shipped'},
-    
+    received: {label:'반품완료 📥', cls:'status-shipped'},
     cancelled:{label:'취소됨 ✕', cls:'status-rejected'}
   };
   const s = statusMap[o.status] || {label:o.status, cls:'status-pending'};
   const itemRows = (o.items||[]).map(i =>
     `<div class="confirm-row">
-      <span class="confirm-row-label">${i.product}</span>
+      <span class="confirm-row-label">${escHtml(i.product)}</span>
       <span class="confirm-row-value">${fmt(i.qty)}개 × ${fmt(i.price)}원 = ${fmt(i.total)}원</span>
     </div>`
   ).join('');
@@ -1999,7 +2020,7 @@ function openOrderDetail(id){
   document.getElementById('orderDetailContent').innerHTML = `
     <div class="confirm-row">
       <span class="confirm-row-label">주문번호</span>
-      <span class="confirm-row-value" style="font-size:.72rem;font-family:monospace">${o.id}</span>
+      <span class="confirm-row-value" style="font-size:.72rem;font-family:monospace">${escHtml(o.id)}</span>
     </div>
     <div class="confirm-row">
       <span class="confirm-row-label">상태</span>
@@ -2007,11 +2028,11 @@ function openOrderDetail(id){
     </div>
     <div class="confirm-row">
       <span class="confirm-row-label">주문일</span>
-      <span class="confirm-row-value">${o.orderDate}</span>
+      <span class="confirm-row-value">${escHtml(o.orderDate||'')}</span>
     </div>
     ${itemRows}
-    ${o.memo ? `<div class="confirm-row"><span class="confirm-row-label">메모</span><span class="confirm-row-value" style="font-size:.8rem">${o.memo}</span></div>` : ''}
-    ${o.statusNote ? `<div class="confirm-row"><span class="confirm-row-label">관리자 메모</span><span class="confirm-row-value" style="font-size:.8rem;color:var(--ky)">${o.statusNote}</span></div>` : ''}
+    ${o.memo ? `<div class="confirm-row"><span class="confirm-row-label">메모</span><span class="confirm-row-value" style="font-size:.8rem">${escHtml(o.memo)}</span></div>` : ''}
+    ${o.statusNote ? `<div class="confirm-row"><span class="confirm-row-label">관리자 메모</span><span class="confirm-row-value" style="font-size:.8rem;color:var(--ky)">${escHtml(o.statusNote)}</span></div>` : ''}
     <div class="confirm-row" style="border-top:2px solid var(--border2);margin-top:4px;padding-top:12px">
       <span class="confirm-row-label" style="font-weight:800">합계</span>
       <span class="confirm-row-value" style="font-size:1.1rem;color:var(--ky)">${fmt(o.total)}원</span>
@@ -2053,7 +2074,7 @@ function openEditOrder(id){
   // 현재 품목을 수정 가능한 UI로 렌더
   const html = (o.items||[]).map((item, idx) => `
     <div style="background:var(--ky-light);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
-      <div style="flex:1;font-weight:700;font-size:.9rem">${item.product}</div>
+      <div style="flex:1;font-weight:700;font-size:.9rem">${escHtml(item.product)}</div>
       <div style="font-size:.78rem;color:var(--text2)">${fmt(item.price)}원/개</div>
       <div style="display:flex;align-items:center;gap:6px">
         <input type="text" inputmode="numeric" class="qty-input"
@@ -2071,7 +2092,7 @@ function openEditOrder(id){
   const memoHtml = `
     <div class="form-group" style="margin-top:10px">
       <label class="form-label">메모</label>
-      <textarea class="memo-input" id="editMemo" style="min-height:60px">${o.memo||''}</textarea>
+      <textarea class="memo-input" id="editMemo" style="min-height:60px">${escHtml(o.memo||'')}</textarea>
     </div>`;
 
   const totalHtml = `
@@ -2198,7 +2219,8 @@ function renderHome(){
   if(!currentDealer) return;
   const mo = ym(today());
   const myOrders = kyOrders.filter(o => o.dealerId === currentDealer.id);
-  const monthOrders = myOrders.filter(o => o.orderDate.startsWith(mo) && o.status !== 'cancelled');
+  // ★ Fix: o.orderDate가 null/undefined인 경우 TypeError 방지
+  const monthOrders = myOrders.filter(o => (o.orderDate||'').startsWith(mo) && o.status !== 'cancelled');
   const pending = myOrders.filter(o => o.status === 'pending').length;
   const shipped = monthOrders.filter(o => o.status === 'shipped').length;
   const monthAmt = monthOrders.reduce((s, o) => s + o.total, 0);
@@ -2247,6 +2269,7 @@ function startListeners(){
     const orderRef = (dealerEmail && fb.query && fb.orderByChild && fb.equalTo)
       ? fb.query(fb.ref(fb.db, 'ky_orders'), fb.orderByChild('dealerEmail'), fb.equalTo(dealerEmail))
       : fb.ref(fb.db, 'ky_orders');
+    _orderListenerRef = orderRef;  // ★ stopListeners에서 같은 객체로 off하기 위해 저장
 
     _orderListener = fb.onValue(orderRef, (snap) => {
       const prev = JSON.parse(JSON.stringify(kyOrders || []));
@@ -2285,7 +2308,8 @@ function startListeners(){
               const detail = (o.items||[]).map(i=>i.product+'×'+i.qty).join(', ');
               addLocalNotif(msg, detail, o.id);
               toast(msg, 'success');
-              if(Notification && Notification.permission === 'granted'){
+              // ★ Fix: window.Notification 가드 (일부 환경 ReferenceError 방지)
+              if(window.Notification && window.Notification.permission === 'granted'){
                 new Notification('KY 주문 시스템', { body: msg + '\n' + detail, icon: 'icon-192.png', requireInteraction: true });
               }
             }
@@ -2302,7 +2326,9 @@ function startListeners(){
 
   if(!_dataListener){
     // 대리점은 amt_data/dealers 만 접근 가능
-    _dataListener = fb.onValue(fb.ref(fb.db, 'amt_data/dealers'), (snap) => {
+    const dataRef = fb.ref(fb.db, 'amt_data/dealers');
+    _dataListenerRef = dataRef;  // ★ 저장
+    _dataListener = fb.onValue(dataRef, (snap) => {
       if(!snap.exists()) return;
       amtData = amtData || {};
       amtData.dealers = snap.val();
@@ -2314,7 +2340,9 @@ function startListeners(){
   }
 
   if(!_metaListener){
-    _metaListener = fb.onValue(fb.ref(fb.db, KY_MUTATION_META_PATH), (snap) => {
+    const metaRef = fb.ref(fb.db, KY_MUTATION_META_PATH);
+    _metaListenerRef = metaRef;  // ★ 저장
+    _metaListener = fb.onValue(metaRef, (snap) => {
       if(!snap.exists() || !currentDealer) return;
       const meta = snap.val() || {};
       if(meta.dealerId && meta.dealerId !== currentDealer.id) return;
@@ -2331,18 +2359,33 @@ function startListeners(){
     });
   }
 
-  // 알림 권한 요청
-  if(Notification && Notification.permission === 'default'){
-    Notification.requestPermission();
+  // 알림 권한 요청 — ★ Fix: window.Notification 가드
+  if(window.Notification && window.Notification.permission === 'default'){
+    window.Notification.requestPermission();
   }
 }
 
 function stopListeners(){
   const fb = window._fb;
   if(!fb) return;
-  if(_orderListener){ fb.off(fb.ref(fb.db,'ky_orders'), _orderListener); _orderListener = null; }
-  if(_dataListener){ fb.off(fb.ref(fb.db,'amt_data'), _dataListener); _dataListener = null; }
-  if(_metaListener){ fb.off(fb.ref(fb.db, KY_MUTATION_META_PATH), _metaListener); _metaListener = null; }
+  // ★ Fix: 등록 시 사용한 동일 ref/query 객체로 off 해야 정상 해제됨
+  if(_orderListener && _orderListenerRef){
+    try{ fb.off(_orderListenerRef, 'value', _orderListener); }catch(e){ try{ fb.off(_orderListenerRef); }catch(e2){} }
+    _orderListener = null; _orderListenerRef = null;
+  }
+  if(_dataListener && _dataListenerRef){
+    try{ fb.off(_dataListenerRef, 'value', _dataListener); }catch(e){ try{ fb.off(_dataListenerRef); }catch(e2){} }
+    _dataListener = null; _dataListenerRef = null;
+  }
+  if(_metaListener && _metaListenerRef){
+    try{ fb.off(_metaListenerRef, 'value', _metaListener); }catch(e){ try{ fb.off(_metaListenerRef); }catch(e2){} }
+    _metaListener = null; _metaListenerRef = null;
+  }
+  // ★ Fix: 5분 코드 재검증 인터벌도 정리
+  if(_revalidateIntervalId){
+    clearInterval(_revalidateIntervalId);
+    _revalidateIntervalId = null;
+  }
 }
 
 /* ═══════════════════════════════════════════════════
@@ -2427,7 +2470,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // (claude.ai, 로컬 등 다른 환경에서는 보안 정책상 등록 불가 → 무시)
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
     const swPath = '/KY/sw-KY.js';
-    navigator.serviceWorker.register(swPath + '?v=20260429-v19')
+    navigator.serviceWorker.register(swPath + '?v=20260505-v20')
       .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }
@@ -2553,7 +2596,7 @@ function showImpersonateBanner(){
   banner.id = 'kyImpersonateBanner';
   banner.style.cssText = 'position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#fbbf24,#f59e0b);color:#422006;padding:10px 14px;text-align:center;font-size:.82rem;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.1);display:flex;justify-content:center;align-items:center;gap:12px;flex-wrap:wrap';
   const name = (currentDealer && currentDealer.name) || '대리점';
-  banner.innerHTML = `⚠️ <span>총괄관리자 - "${name}" 뷰 체험 중 (읽기 전용)</span> <button onclick="window.close()" style="background:#422006;color:#fff;border:none;padding:4px 12px;border-radius:6px;font-size:.75rem;font-weight:700;cursor:pointer">✕ 탭 닫기</button>`;
+  banner.innerHTML = `⚠️ <span>총괄관리자 - "${escHtml(name)}" 뷰 체험 중 (읽기 전용)</span> <button onclick="window.close()" style="background:#422006;color:#fff;border:none;padding:4px 12px;border-radius:6px;font-size:.75rem;font-weight:700;cursor:pointer">✕ 탭 닫기</button>`;
   document.body.insertBefore(banner, document.body.firstChild);
 }
 

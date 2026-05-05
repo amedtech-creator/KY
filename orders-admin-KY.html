@@ -394,6 +394,13 @@ const KY_MUTATION_META_PATH = 'ky_orders_meta/lastMutation';
 function fmt(n){ return Number(n||0).toLocaleString('ko-KR'); }
 function today(){ return new Date().toISOString().slice(0,10); }
 function ym(d){ return (d||'').slice(0,7); }
+// ★ XSS 방지: 사용자 입력을 HTML에 삽입할 때 escape
+function escHtml(s){
+  if(s == null) return '';
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 function kyOrderSortStamp(order){ return order?.updatedAt || order?.statusUpdatedAt || order?.createdAt || ''; }
 function sortKyOrdersDesc(list){
   return [...(list||[])].sort((a,b) => kyOrderSortStamp(b).localeCompare(kyOrderSortStamp(a)) || (b.orderDate||'').localeCompare(a.orderDate||''));
@@ -521,20 +528,20 @@ function showCodeRequestPopup(n){
   popup.innerHTML = `
     <div style="font-size:1.1rem;font-weight:800;color:var(--ky);margin-bottom:10px">🔑 대리점 코드 재설정 요청</div>
     <div style="font-size:.92rem;color:var(--text);margin-bottom:14px;padding:10px;background:var(--ky-light);border-radius:8px">
-      ${(n.message||'').replace('[코드요청] ','') || ((n.email||'(이메일 불명)') + ' 계정 코드 요청')}
+      ${escHtml((n.message||'').replace('[코드요청] ','') || ((n.email||'(이메일 불명)') + ' 계정 코드 요청'))}
     </div>
     <div style="font-size:.72rem;color:var(--text3);margin-bottom:14px">
-      ${n.at ? new Date(n.at).toLocaleString('ko-KR') : ''}
+      ${n.at ? escHtml(new Date(n.at).toLocaleString('ko-KR')) : ''}
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn btn-ghost btn-sm" onclick="dismissCodeReqPopup('${n._fbId}', false)">닫기</button>
-      <button class="btn btn-ky btn-sm" onclick="dismissCodeReqPopup('${n._fbId}', true)">확인 처리</button>
+      <button class="btn btn-ghost btn-sm" onclick="dismissCodeReqPopup('${escHtml(n._fbId||'')}', false)">닫기</button>
+      <button class="btn btn-ky btn-sm" onclick="dismissCodeReqPopup('${escHtml(n._fbId||'')}', true)">확인 처리</button>
     </div>
   `;
   document.body.appendChild(popup);
 
-  // 브라우저 알림
-  if(Notification && Notification.permission === 'granted'){
+  // 브라우저 알림 — ★ Fix: window.Notification 가드
+  if(window.Notification && window.Notification.permission === 'granted'){
     new Notification('🔑 대리점 코드 요청', {
       body: (n.message||'').replace('[코드요청] ','') || (n.email||'') + ' 계정',
       icon: '/KY/icon-192.png', tag: 'code-req-'+(n._fbId||''), requireInteraction: true
@@ -687,7 +694,7 @@ function openAction(orderId, targetStatus){
 
   const itemRows = (o.items||[]).map(i=>
     `<div class="modal-row">
-      <span>${i.product}</span>
+      <span>${escHtml(i.product)}</span>
       <span style="font-weight:700">${fmt(i.qty)}개 · ${fmt(i.total)}원</span>
     </div>`
   ).join('');
@@ -702,10 +709,10 @@ function openAction(orderId, targetStatus){
   }
 
   document.getElementById('detailContent').innerHTML = `
-    <div class="modal-row"><span>대리점</span><span style="font-weight:700">${o.dealerName}</span></div>
-    <div class="modal-row"><span>주문일</span><span>${o.orderDate}</span></div>
+    <div class="modal-row"><span>대리점</span><span style="font-weight:700">${escHtml(o.dealerName)}</span></div>
+    <div class="modal-row"><span>주문일</span><span>${escHtml(o.orderDate||'')}</span></div>
     ${itemRows}
-    ${o.memo ? `<div class="modal-row"><span>메모</span><span style="font-size:.8rem">${o.memo}</span></div>` : ''}
+    ${o.memo ? `<div class="modal-row"><span>메모</span><span style="font-size:.8rem">${escHtml(o.memo)}</span></div>` : ''}
     <div class="modal-row" style="padding-top:12px;font-weight:800">
       <span>합계</span>
       <span style="color:var(--ky);font-size:1rem">${fmt(o.total)}원</span>
@@ -717,10 +724,10 @@ function openAction(orderId, targetStatus){
       → ${statusLabels[targetStatus]||targetStatus}
     </div>
     ${actionGuide}
-    <textarea class="note-input" id="actionNote" placeholder="대리점에 전달할 메모 (선택사항)...">${o.statusNote||''}</textarea>
+    <textarea class="note-input" id="actionNote" placeholder="대리점에 전달할 메모 (선택사항)...">${escHtml(o.statusNote||'')}</textarea>
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn btn-ghost" style="flex:1" onclick="closeDetail()">취소</button>
-      <button class="btn btn-ky" style="flex:2;background:${statusColors[targetStatus]||'var(--ky)'}; border-color:${statusColors[targetStatus]||'var(--ky)'}" onclick="confirmAction('${orderId}','${targetStatus}')">
+      <button class="btn btn-ky" style="flex:2;background:${statusColors[targetStatus]||'var(--ky)'}; border-color:${statusColors[targetStatus]||'var(--ky)'}" onclick="confirmAction('${escHtml(orderId)}','${escHtml(targetStatus)}')">
         확인 — ${statusLabels[targetStatus]||targetStatus}
       </button>
     </div>
@@ -1230,12 +1237,12 @@ function renderAdminCodeList(data){
     const isSuper = adm.role === 'super';
     return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">' +
       '<div style="flex:1">' +
-        '<div style="font-weight:700;font-size:.88rem">' + displayName + (isSuper?' <span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:6px;font-size:.65rem;font-weight:700">총괄</span>':'') + '</div>' +
-        '<div style="font-size:.7rem;color:#6b7280;font-family:monospace">' + adm.email + '</div>' +
+        '<div style="font-weight:700;font-size:.88rem">' + escHtml(displayName) + (isSuper?' <span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:6px;font-size:.65rem;font-weight:700">총괄</span>':'') + '</div>' +
+        '<div style="font-size:.7rem;color:#6b7280;font-family:monospace">' + escHtml(adm.email||'') + '</div>' +
       '</div>' +
-      '<input type="text" id="acode_' + key + '" value="' + code + '" style="width:90px;padding:5px 8px;border:1.5px solid var(--border);border-radius:6px;font-family:monospace;font-size:.9rem;font-weight:700;text-align:center">' +
-      '<button class="btn btn-primary btn-xs" onclick="saveOneAdminCode(\'' + key + '\')">저장</button>' +
-      (isSuper ? '' : '<button class="btn btn-danger btn-xs" onclick="deleteAdminCode(\'' + key + '\')">삭제</button>') +
+      '<input type="text" id="acode_' + escHtml(key) + '" value="' + escHtml(code) + '" style="width:90px;padding:5px 8px;border:1.5px solid var(--border);border-radius:6px;font-family:monospace;font-size:.9rem;font-weight:700;text-align:center">' +
+      '<button class="btn btn-primary btn-xs" onclick="saveOneAdminCode(\'' + escHtml(key) + '\')">저장</button>' +
+      (isSuper ? '' : '<button class="btn btn-danger btn-xs" onclick="deleteAdminCode(\'' + escHtml(key) + '\')">삭제</button>') +
     '</div>';
   }).join('');
 }
@@ -1327,10 +1334,10 @@ function renderDealerCodeList(dealers){
   }
   wrap.innerHTML = dealers.map((d,i) => `
     <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
-      <span style="flex:1;font-weight:700;font-size:.88rem">${d.name}</span>
-      <input type="text" id="dcode_${i}" value="${d.code||d.id||''}"
+      <span style="flex:1;font-weight:700;font-size:.88rem">${escHtml(d.name)}</span>
+      <input type="text" id="dcode_${i}" value="${escHtml(d.code||d.id||'')}"
         style="width:90px;padding:5px 8px;border:1.5px solid var(--border);border-radius:6px;font-family:monospace;font-size:.9rem;font-weight:700;text-align:center">
-      <button class="btn btn-primary btn-xs" onclick="saveDealerCode(${i},'${d.id}')">저장</button>
+      <button class="btn btn-primary btn-xs" onclick="saveDealerCode(${i},${JSON.stringify(d.id)})">저장</button>
     </div>
   `).join('');
 }
@@ -1397,7 +1404,7 @@ function showNewOrderPopup(order){
     'box-shadow:0 8px 36px rgba(217,119,6,.35)'
   ].join(';');
 
-  const itemsText = (order.items||[]).map(i => i.product + ' ' + fmt(i.qty) + '개').join(' · ');
+  const itemsText = (order.items||[]).map(i => escHtml(i.product) + ' ' + fmt(i.qty) + '개').join(' · ');
   const typeTag = order.orderType && order.orderType !== 'order'
     ? `<span style="margin-left:6px;font-size:.62rem;padding:2px 7px;border-radius:10px;font-weight:700;background:${order.orderType==='return'?'#fef3c7':'#eff6ff'};color:${order.orderType==='return'?'#92400e':'#1e40af'}">${order.orderType==='return'?'반품':'교환'}</span>` : '';
   const now = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
@@ -1410,7 +1417,7 @@ function showNewOrderPopup(order){
         <div style="font-size:.72rem;color:#6b7280">${now}</div>
       </div>
     </div>
-    <div style="font-weight:700;font-size:.98rem;margin-bottom:3px">${order.dealerName}${typeTag}</div>
+    <div style="font-weight:700;font-size:.98rem;margin-bottom:3px">${escHtml(order.dealerName||'')}${typeTag}</div>
     <div style="font-size:.82rem;color:#374151;margin-bottom:12px">${itemsText}</div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <span style="font-family:monospace;font-size:1.05rem;font-weight:800;color:var(--ky)">${fmt(order.total)}원</span>
@@ -1420,7 +1427,7 @@ function showNewOrderPopup(order){
         style="padding:9px;border-radius:8px;border:1.5px solid #d1d5db;background:#fff;cursor:pointer;font-size:.85rem;font-weight:600">
         닫기
       </button>
-      <button onclick="document.getElementById('newOrderPopup').remove(); filterByDealer('${order.dealerName}');"
+      <button onclick="document.getElementById('newOrderPopup').remove(); filterByDealer(${JSON.stringify(order.dealerName||'')});"
         style="padding:9px;border-radius:8px;border:none;background:var(--ky);color:#fff;cursor:pointer;font-size:.85rem;font-weight:700">
         ✅ 확인
       </button>
@@ -1441,7 +1448,7 @@ function filterByDealer(name){
 window.addEventListener('DOMContentLoaded', async () => {
   // SW 등록 — github.io 배포환경에서만
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
-    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260429-v19')
+    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260505-v20')
       .then(r => console.log('[KY Admin SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY Admin SW] 등록 스킵:', e.message));
   }

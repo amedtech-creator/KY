@@ -257,32 +257,37 @@ window.doLogin = async () => {
   btn.disabled = true;
   showMsg('loginMsg','🔐 인증 중...','');
 
-  const res = await verifyAndSignIn(email, pw);
-  if(!res.ok){
+  // ★ Fix: sendOtp/finalizeLogin 후에도 OTP 화면에서 페이지 새로고침 등 비정상 종료 시
+  // 다음 로그인 시도에 대비해 항상 버튼 상태 복원 (try/finally)
+  try {
+    const res = await verifyAndSignIn(email, pw);
+    if(!res.ok){
+      let msg = '❌ 이메일 또는 코드번호가 틀립니다';
+      if(res.reason==='no_dealers') msg = '❌ 대리점 데이터 없음';
+      if(res.reason==='db_error') msg = '❌ 서버 오류: '+(res.message||'');
+      if(res.reason==='auth_legacy') msg = '⚠️ 관리자에게 문의 (Firebase Auth 재설정 필요)';
+      if(res.reason==='auth_signin_error') msg = '❌ '+(res.message||'인증 실패');
+      if(res.reason==='auth_create_error') msg = '❌ 계정 생성 실패: '+(res.message||'');
+      showMsg('loginMsg', msg, 'error');
+      return;
+    }
+
+    _pendingEmail = email.toLowerCase();
+    _pendingRole = res.role;
+    _pendingCode = pw;
+    _pendingDealerInfo = res.dealer || null;
+    _pendingAdminName = res.name || '';
+
+    const deviceOk = localStorage.getItem('ky_device_verified_'+btoa(email.toLowerCase()).replace(/=/g,'')) === '1';
+    if(deviceOk){
+      await finalizeLogin(false);
+      return;
+    }
+    await sendOtp(_pendingEmail, _pendingRole);
+  } finally {
     btn.classList.remove('loading');
     btn.disabled = false;
-    let msg = '❌ 이메일 또는 코드번호가 틀립니다';
-    if(res.reason==='no_dealers') msg = '❌ 대리점 데이터 없음';
-    if(res.reason==='db_error') msg = '❌ 서버 오류: '+(res.message||'');
-    if(res.reason==='auth_legacy') msg = '⚠️ 관리자에게 문의 (Firebase Auth 재설정 필요)';
-    if(res.reason==='auth_signin_error') msg = '❌ '+(res.message||'인증 실패');
-    if(res.reason==='auth_create_error') msg = '❌ 계정 생성 실패: '+(res.message||'');
-    showMsg('loginMsg', msg, 'error');
-    return;
   }
-
-  _pendingEmail = email.toLowerCase();
-  _pendingRole = res.role;
-  _pendingCode = pw;
-  _pendingDealerInfo = res.dealer || null;
-  _pendingAdminName = res.name || '';
-
-  const deviceOk = localStorage.getItem('ky_device_verified_'+btoa(email.toLowerCase()).replace(/=/g,'')) === '1';
-  if(deviceOk){
-    await finalizeLogin(false);
-    return;
-  }
-  await sendOtp(_pendingEmail, _pendingRole);
 };
 
 async function finalizeLogin(fromOtp){
