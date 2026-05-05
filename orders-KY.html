@@ -1529,9 +1529,10 @@ function loadProductGrid(){
 
   const html = dealerProducts.map(p => {
     const isSelected = cart.some(c => c.product === p.product);
-    // ★ XSS 방지: 제품명 escape, JS 문자열 리터럴은 JSON.stringify로 안전하게
+    // ★ XSS 방지: 제품명은 escape, onclick 안에 들어가는 JS 리터럴은 JSON.stringify 후 큰따옴표를 &quot;로 변환
+    // (HTML 속성이 큰따옴표로 감싸져 있으므로 JSON 문자열의 " 도 HTML escape 해야 onclick 속성이 깨지지 않음)
     const prodEsc = escHtml(p.product);
-    const prodArg = JSON.stringify(p.product);
+    const prodArg = JSON.stringify(p.product).replace(/"/g,'&quot;');
     const idSafe = String(p.product).replace(/[^a-zA-Z0-9가-힣]/g,'_');
     return `<div class="product-card ${isSelected?'selected':''}" onclick="toggleProduct(${prodArg}, ${p.price})" id="pc_${idSafe}">
       <div class="product-check">✓</div>
@@ -2470,7 +2471,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // (claude.ai, 로컬 등 다른 환경에서는 보안 정책상 등록 불가 → 무시)
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
     const swPath = '/KY/sw-KY.js';
-    navigator.serviceWorker.register(swPath + '?v=20260505-v20')
+    navigator.serviceWorker.register(swPath + '?v=20260505-v21')
       .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }

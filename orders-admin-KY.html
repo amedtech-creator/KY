@@ -401,6 +401,10 @@ function escHtml(s){
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
+// ★ Fix: onclick 같은 큰따옴표로 감싼 HTML 속성 안에 JS 리터럴을 안전하게 삽입
+function jsAttr(v){
+  return JSON.stringify(v == null ? '' : v).replace(/"/g,'&quot;');
+}
 function kyOrderSortStamp(order){ return order?.updatedAt || order?.statusUpdatedAt || order?.createdAt || ''; }
 function sortKyOrdersDesc(list){
   return [...(list||[])].sort((a,b) => kyOrderSortStamp(b).localeCompare(kyOrderSortStamp(a)) || (b.orderDate||'').localeCompare(a.orderDate||''));
@@ -1337,7 +1341,7 @@ function renderDealerCodeList(dealers){
       <span style="flex:1;font-weight:700;font-size:.88rem">${escHtml(d.name)}</span>
       <input type="text" id="dcode_${i}" value="${escHtml(d.code||d.id||'')}"
         style="width:90px;padding:5px 8px;border:1.5px solid var(--border);border-radius:6px;font-family:monospace;font-size:.9rem;font-weight:700;text-align:center">
-      <button class="btn btn-primary btn-xs" onclick="saveDealerCode(${i},${JSON.stringify(d.id)})">저장</button>
+      <button class="btn btn-primary btn-xs" onclick="saveDealerCode(${i},${jsAttr(d.id)})">저장</button>
     </div>
   `).join('');
 }
@@ -1427,7 +1431,7 @@ function showNewOrderPopup(order){
         style="padding:9px;border-radius:8px;border:1.5px solid #d1d5db;background:#fff;cursor:pointer;font-size:.85rem;font-weight:600">
         닫기
       </button>
-      <button onclick="document.getElementById('newOrderPopup').remove(); filterByDealer(${JSON.stringify(order.dealerName||'')});"
+      <button onclick="document.getElementById('newOrderPopup').remove(); filterByDealer(${jsAttr(order.dealerName||'')});"
         style="padding:9px;border-radius:8px;border:none;background:var(--ky);color:#fff;cursor:pointer;font-size:.85rem;font-weight:700">
         ✅ 확인
       </button>
@@ -1448,7 +1452,7 @@ function filterByDealer(name){
 window.addEventListener('DOMContentLoaded', async () => {
   // SW 등록 — github.io 배포환경에서만
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
-    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260505-v20')
+    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260505-v21')
       .then(r => console.log('[KY Admin SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY Admin SW] 등록 스킵:', e.message));
   }
