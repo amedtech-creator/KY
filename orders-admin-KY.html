@@ -570,6 +570,9 @@ function startListener(){
   const fb = window._fb;
   if(!fb || !fb.ready) return;
 
+  // ★ 택배비 금액 표시를 위해 대리점 목록을 미리 읽어둔다 (실패해도 무시)
+  loadDealersCacheForFee();
+
   if(!_listener){
     let firstLoad = true;
     _listener = fb.onValue(fb.ref(fb.db, 'ky_orders'), (snap) => {
@@ -723,11 +726,56 @@ function openAction(orderId, targetStatus){
     </div>
   `;
 
+  // ★ 택배비 포함 선택 UI (출고 처리 + 해당 대리점에 택배비가 등록된 경우에만 표시)
+  let feeSelectHtml = '';
+  if(targetStatus === 'shipped' && !isReturn && !isExchange){
+    const dealerFee = getDealerFeeForOrder(o);
+    const orderHasFee = (o.fee||0) > 0;
+    if(dealerFee > 0 || orderHasFee){
+      const isHighlight = isFeeHighlightDealer(o.dealerName);
+      // ★ 대리점이 주문할 때 택배비 포함을 선택했으면 그 값을 기본값으로 (관리자가 변경 가능)
+      const dealerChose = (o.feeInclude !== undefined && o.feeInclude !== null);
+      const defaultChecked = (dealerChose ? !!o.feeInclude : (isHighlight || orderHasFee)) ? 'checked' : '';
+      const dealerChoiceMsg = dealerChose
+        ? `<div style="font-size:.74rem;margin-top:6px;padding:6px 10px;border-radius:6px;background:${o.feeInclude?'#dcfce7':'#f3f4f6'};color:${o.feeInclude?'#166534':'#4b5563'};font-weight:700">
+             📩 대리점 주문 시 선택: <b>${o.feeInclude?'택배비 포함':'택배비 미포함'}</b>
+           </div>` : '';
+      const feeAmt = dealerFee || (o.fee||0);
+      if(isHighlight){
+        feeSelectHtml = `
+          <div style="background:#fef2f2;border:2px solid #dc2626;border-radius:8px;padding:14px 16px;margin-bottom:10px;box-shadow:0 0 0 3px rgba(220,38,38,0.1)">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:1.05rem;font-weight:700;color:#dc2626">
+              <input type="checkbox" id="kyShipFeeInclude" ${defaultChecked} style="width:24px;height:24px;cursor:pointer;accent-color:#dc2626">
+              <span>🚨 택배비 포함 여부 반드시 확인 <span style="font-size:.85rem;font-weight:600">(택배비포함시 ✔체크해주세요)</span></span>
+            </label>
+            <div style="font-size:.82rem;color:#991b1b;margin-top:8px;padding-left:34px;font-weight:600">
+              ⚠️ <b>${escHtml(o.dealerName||'')}</b> 은(는) 택배비 처리에 주의가 필요합니다<br>
+              <span style="font-weight:500">택배비 ${fmt(feeAmt)}원 포함 여부를 정확히 확인하세요.</span>
+            </div>
+            ${dealerChoiceMsg}
+          </div>`;
+      } else {
+        feeSelectHtml = `
+          <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;margin-bottom:10px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.85rem;font-weight:600;color:#92400e">
+              <input type="checkbox" id="kyShipFeeInclude" ${defaultChecked} style="width:18px;height:18px;cursor:pointer">
+              <span>🚚 택배비 포함</span>
+            </label>
+            <div style="font-size:.7rem;color:#78350f;margin-top:4px;padding-left:26px">
+              체크 시 발주·수금 금액에 택배비가 더해집니다 (${escHtml(o.dealerName||'')}: 택배비 ${fmt(feeAmt)}원)
+            </div>
+            ${dealerChoiceMsg}
+          </div>`;
+      }
+    }
+  }
+
   document.getElementById('actionArea').innerHTML = `
     <div style="font-weight:700;margin-bottom:8px;color:${statusColors[targetStatus]||'var(--text)'}">
       → ${statusLabels[targetStatus]||targetStatus}
     </div>
     ${actionGuide}
+    ${feeSelectHtml}
     <textarea class="note-input" id="actionNote" placeholder="대리점에 전달할 메모 (선택사항)...">${escHtml(o.statusNote||'')}</textarea>
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn btn-ghost" style="flex:1" onclick="closeDetail()">취소</button>
@@ -754,18 +802,27 @@ async function confirmAction(orderId, targetStatus){
 
   try{
     const now = new Date().toISOString();
+
+    // ★ '택배비 포함' 체크박스를 먼저 읽어서 발주 등록에 전달한다
+    //   (체크박스가 없는 대리점이면 undefined → 기존 동작 그대로 0원)
+    const _feeCbxEl = document.getElementById('kyShipFeeInclude');
+    const _incFee = _feeCbxEl ? _feeCbxEl.checked : undefined;
+    const _isShipSale = (targetStatus === 'shipped' && o.orderType !== 'return' && o.orderType !== 'exchange');
+    const _shipFee = _isShipSale ? resolveShipFee(o, _incFee) : (Number(o.shipFee)||0);
+
     const updated = {
       ...o,
       status: targetStatus,
       statusNote: note,
       statusUpdatedAt: now,
-      processedBy: window._adminName || '─'
+      processedBy: window._adminName || '─',
+      shipFee: _shipFee   // AMT 앱 KY주문관리 화면에서 택배비 포함 금액 표시용
     };
     await fb.set(fb.ref(fb.db, 'ky_orders/' + orderId), updated);
     await touchKyMutation('status', orderId, { status: targetStatus, dealerId: o.dealerId || '' });
 
     if(targetStatus === 'shipped' && o.orderType !== 'return' && o.orderType !== 'exchange'){
-      await autoUpdateAmtOnShipped(o, note, now);
+      await autoUpdateAmtOnShipped(o, note, now, _shipFee);
     }
     if(targetStatus === 'received' && o.orderType === 'return'){
       await autoUpdateAmtOnReturn(o, note, now);
@@ -897,7 +954,62 @@ async function sendTelegramStatus(order, targetStatus, note, nowIso){
    - AMT 발주(orders) 추가
    - 수금관리(orders) 연동
 ═══════════════════════════════════════════════ */
-async function autoUpdateAmtOnShipped(order, note, now){
+/* ═══════════════════════════════════════════════════════
+   택배비 처리 (AMT 앱 orders-admin-AMT.html 과 동일 규칙)
+   ─────────────────────────────────────────────────────
+   - 출고 시 '택배비 포함' 체크를 하면 대리점에 등록된 택배비(fee)를
+     AMT 발주에 함께 기록한다 → 발주입력·수금관리 금액에 반영됨
+   - 체크 해제 시 0원 (기존 동작과 동일)
+   - 택배비는 첫 번째 품목 1건에만 붙인다 (중복 합산 방지)
+═══════════════════════════════════════════════════════ */
+
+// 택배비 처리에 주의가 필요한 대리점 (빨간색 강조 + 기본 체크)
+const FEE_HIGHLIGHT_DEALERS = [
+  '(주)서정메디케어', '서정메디케어',
+  '엔케이바이오', '(주)엔케이바이오',
+  '(주)베스트메디아', '베스트메디아'
+];
+function isFeeHighlightDealer(dealerName){
+  if(!dealerName) return false;
+  const n = String(dealerName).trim();
+  return FEE_HIGHLIGHT_DEALERS.some(d => n === d || n.includes(d));
+}
+
+// 대리점 목록 캐시 (택배비 금액을 모달에서 바로 보여주기 위해 미리 읽어둠)
+let _kyDealersCache = [];
+async function loadDealersCacheForFee(){
+  const fb = window._fb;
+  if(!fb || !fb.ready) return;
+  try{
+    const snap = await fb.get(fb.ref(fb.db, 'amt_data/dealers'));
+    if(!snap.exists()) return;
+    const v = snap.val();
+    _kyDealersCache = Array.isArray(v) ? v : Object.values(v||{});
+  }catch(e){
+    // 실패해도 무시 — 체크박스가 안 보일 뿐, 기존 동작(택배비 0원) 그대로
+    console.warn('[택배비] 대리점 목록 로드 실패:', e.message);
+  }
+}
+
+// 해당 주문 대리점의 택배비 금액 (등록 안 돼 있으면 0)
+function getDealerFeeForOrder(order){
+  if(!order) return 0;
+  const d = _kyDealersCache.find(x => x && (x.id === order.dealerId || x.name === order.dealerName));
+  return Number(d && d.fee) || 0;
+}
+
+// 출고 시 적용할 택배비 확정 (체크박스 값 기준)
+function resolveShipFee(order, includeDeliveryFee){
+  const hasFeeAuto = (Number(order && order.fee) || 0) > 0;
+  const includeFee = (includeDeliveryFee === undefined || includeDeliveryFee === null)
+    ? hasFeeAuto
+    : !!includeDeliveryFee;
+  if(!includeFee) return 0;
+  return getDealerFeeForOrder(order) || (Number(order && order.fee) || 0);
+}
+
+// shipFee: 출고 시 '택배비 포함' 체크로 확정된 택배비 금액 (없으면 0)
+async function autoUpdateAmtOnShipped(order, note, now, shipFee){
   const fb = window._fb;
   if(!fb||!fb.ready) return;
 
@@ -933,12 +1045,15 @@ async function autoUpdateAmtOnShipped(order, note, now){
     }
 
     if(dealer){
+      // ★ 택배비는 첫 번째 품목 1건에만 붙인다 (거래명세서와 동일 규칙, 중복 합산 방지)
+      let _feeLeft = Number(shipFee) || 0;
       for(const item of (order.items||[])){
         const lineId = 'ord_ky_' + order.id + '_' + item.product.replace(/\s/g,'_');
         const dp = (dealer.products||[]).find(p => p.product === item.product);
         const price = dp ? dp.price : item.price;
         const dueDate = calcDueDate(order.orderDate || now.slice(0,10), dealer.term || 'eom');
         const existingIdx = amtOrders.findIndex(o => o.id === lineId || (o.relKyOrder===order.id && !(o.isReturn||o.orderType==='return') && (o.relKyProduct||o.product)===item.product));
+        const _lineFee = _feeLeft; _feeLeft = 0;
         const newOrder = {
           id: lineId,
           dealerId: order.dealerId,
@@ -947,7 +1062,7 @@ async function autoUpdateAmtOnShipped(order, note, now){
           qty: Math.abs(item.qty),
           price: price,
           total: price * Math.abs(item.qty),
-          fee: 0,
+          fee: _lineFee,
           orderDate: order.orderDate || now.slice(0,10),
           dueDate: dueDate,
           status: 'pending',
@@ -1452,7 +1567,7 @@ function filterByDealer(name){
 window.addEventListener('DOMContentLoaded', async () => {
   // SW 등록 — github.io 배포환경에서만
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
-    navigator.serviceWorker.register('/KY/sw-KY.js?v=20260505-v21')
+    navigator.serviceWorker.register('/KY/sw-KY.js?v=20261015-v23')
       .then(r => console.log('[KY Admin SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY Admin SW] 등록 스킵:', e.message));
   }

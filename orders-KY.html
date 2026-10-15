@@ -911,6 +911,9 @@ textarea.memo-input{
         <textarea class="memo-input" id="orderMemo" placeholder="요청사항, 배송 주의사항 등을 입력하세요..."></textarea>
       </div>
 
+      <!-- ★ 택배비 포함 선택 (서정메디케어·엔케이바이오만 표시) -->
+      <div id="kyFeeChoiceBox" style="display:none"></div>
+
       <div class="order-total" id="orderTotalBox"></div>
 
       <button class="btn btn-ky btn-full" style="font-size:1rem;padding:14px" onclick="goToStep3()">
@@ -1053,6 +1056,29 @@ let amtData = null;         // full amt_data from Firebase
 let kyOrders = [];          // ky_orders from Firebase
 let cart = [];              // [{product, price, qty}]
 let notifications = [];     // local notification log
+
+/* ─── 택배비 포함 선택 ───────────────────────────────
+   판단 기준: 대리점관리에 '택배비(fee)'가 등록된 대리점만 선택칸이 뜬다.
+   → 대리점 이름을 바꿔도 안 깨지고, 택배비 받는 대리점이 새로 생기면
+     코드 수정 없이 자동으로 선택칸이 생긴다.
+     (현재 해당: 서정메디케어 4,500원 · 엔케이바이오 4,500원)
+   체크한 값은 주문에 feeInclude로 저장되고, 관리자 출고 화면의
+   '택배비 포함' 체크박스 기본값으로 쓰인다 (관리자가 최종 변경 가능). */
+
+// 이 대리점에 등록된 택배비 (0이면 선택칸을 띄우지 않음)
+function kyDealerFeeAmount(){
+  if(!currentDealer) return 0;
+  return Number(currentDealer.fee) || 0;
+}
+// 현재 체크 상태 (칸이 없으면 false)
+function kyFeeChecked(){
+  const el = document.getElementById('kyOrderFeeInclude');
+  return !!(el && el.checked);
+}
+// 주문에 실제로 더해질 택배비 금액
+function kyFeeApplied(){
+  return kyFeeChecked() ? kyDealerFeeAmount() : 0;
+}
 let _orderListener = null;
 let _dataListener = null;
 let _metaListener = null;
@@ -1575,6 +1601,9 @@ function resetOrder(){
   goToStepUI(1);
   loadProductGrid();
   document.getElementById('orderMemo').value = '';
+  // ★ 택배비 선택 초기화 (다음 주문에 이전 체크가 남지 않도록)
+  const feeBox = document.getElementById('kyFeeChoiceBox');
+  if(feeBox){ feeBox.dataset.checked = '0'; feeBox.innerHTML = ''; feeBox.style.display = 'none'; }
 }
 
 
@@ -1597,6 +1626,7 @@ function goToStepUI(n){
 function goToStep2(){
   if(!cart.length){ toast('상품을 선택하세요','error'); return; }
   goToStepUI(2);
+  renderKyFeeChoice();   // ★ 택배비 선택칸 (해당 대리점만)
   renderCartItems();
 }
 
@@ -1622,7 +1652,7 @@ function goToStep3(){
   renderConfirm();
 }
 
-function backToStep2(){ goToStepUI(2); renderCartItems(); }
+function backToStep2(){ goToStepUI(2); renderKyFeeChoice(); renderCartItems(); }
 
 function renderCartItems(){
   const icons = {'JUC':'🖥️','MEDIAS':'📺','DELL':'💻'};
@@ -1692,23 +1722,69 @@ function removeCart(idx){
   renderCartItems();
 }
 
+// ★ 택배비 포함 선택칸 그리기 (해당 대리점이 아니면 숨김)
+//   체크 상태는 다시 그려도 유지된다.
+function renderKyFeeChoice(){
+  const box = document.getElementById('kyFeeChoiceBox');
+  if(!box) return;
+  const feeAmt = kyDealerFeeAmount();
+  if(feeAmt <= 0){
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  const wasChecked = box.dataset.checked === '1';
+  box.style.display = 'block';
+  box.innerHTML = `
+    <div style="background:#fef2f2;border:2px solid #dc2626;border-radius:10px;padding:14px 16px;margin-bottom:10px;box-shadow:0 0 0 3px rgba(220,38,38,.08)">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:1rem;font-weight:800;color:#dc2626">
+        <input type="checkbox" id="kyOrderFeeInclude" ${wasChecked?'checked':''}
+          style="width:24px;height:24px;cursor:pointer;accent-color:#dc2626;flex-shrink:0"
+          onchange="onKyFeeToggle()">
+        <span>🚚 택배비 포함해서 주문</span>
+      </label>
+      <div style="font-size:.8rem;color:#991b1b;margin-top:8px;padding-left:34px;font-weight:600">
+        체크하면 택배비 <b>${fmt(feeAmt)}원</b>이 주문금액에 더해집니다.<br>
+        <span style="font-weight:500">택배비를 따로 부담하지 않는 주문이면 체크하지 마세요.</span>
+      </div>
+    </div>`;
+}
+
+// 체크박스를 켜고 끌 때 — 상태 기억 + 합계 다시 계산
+function onKyFeeToggle(){
+  const box = document.getElementById('kyFeeChoiceBox');
+  if(box) box.dataset.checked = kyFeeChecked() ? '1' : '0';
+  renderOrderTotal();
+}
+
 function renderOrderTotal(){
   const subtotal = cart.reduce((s, c) => s + c.price * c.qty, 0);
   const totalQty = cart.reduce((s, c) => s + c.qty, 0);
+  const feeAmt = kyFeeApplied();   // 체크 안 했으면 0
   document.getElementById('orderTotalBox').innerHTML = `
     <div class="order-total-row">
       <span>총 수량</span>
       <span class="order-total-value">${fmt(totalQty)}개</span>
     </div>
     <div class="order-total-row">
-      <span>총 주문금액</span>
+      <span>상품 금액</span>
       <span class="order-total-value">${fmt(subtotal)}원</span>
+    </div>
+    ${feeAmt > 0 ? `
+    <div class="order-total-row">
+      <span>택배비</span>
+      <span class="order-total-value" style="color:#dc2626">+${fmt(feeAmt)}원</span>
+    </div>` : ''}
+    <div class="order-total-row">
+      <span>총 주문금액</span>
+      <span class="order-total-value">${fmt(subtotal + feeAmt)}원</span>
     </div>
   `;
 }
 
 function renderConfirm(){
   const subtotal = cart.reduce((s, c) => s + c.price * c.qty, 0);
+  const feeAmt = kyFeeApplied();   // ★ 택배비 (체크 안 했으면 0)
   const memo = document.getElementById('orderMemo').value;
   const rows = cart.map(c =>
     `<div class="confirm-row">
@@ -1727,10 +1803,15 @@ function renderConfirm(){
       <span class="confirm-row-value">${today()}</span>
     </div>
     ${rows}
+    ${feeAmt > 0 ? `
+    <div class="confirm-row">
+      <span class="confirm-row-label" style="color:#dc2626;font-weight:700">🚚 택배비</span>
+      <span class="confirm-row-value" style="color:#dc2626;font-weight:800">+${fmt(feeAmt)}원</span>
+    </div>` : ''}
     ${memo ? `<div class="confirm-row"><span class="confirm-row-label">메모</span><span class="confirm-row-value" style="font-size:.8rem">${escHtml(memo)}</span></div>` : ''}
     <div class="confirm-row" style="border-top:2px solid var(--border2);margin-top:4px;padding-top:12px">
       <span class="confirm-row-label" style="font-weight:800">합계</span>
-      <span class="confirm-row-value" style="font-size:1.2rem;color:var(--ky);font-weight:900">${fmt(subtotal)}원</span>
+      <span class="confirm-row-value" style="font-size:1.2rem;color:var(--ky);font-weight:900">${fmt(subtotal + feeAmt)}원</span>
     </div>
   `;
 }
@@ -1756,6 +1837,9 @@ async function submitOrder(){
     const orderId = genId();
     const subtotal = cart.reduce((s, c) => s + c.price * c.qty, 0);
     const memo = document.getElementById('orderMemo').value;
+    // ★ 택배비 포함 선택 (서정메디케어·엔케이바이오만 해당, 그 외는 0)
+    const feeAmt = kyFeeApplied();
+    const feeChoiceAvailable = kyDealerFeeAmount() > 0;
 
     const order = {
       id: orderId,
@@ -1763,7 +1847,11 @@ async function submitOrder(){
       dealerName: currentDealer.name,
       dealerEmail: (currentDealer.email||'').toLowerCase(),
       items: cart.map(c => ({ product: c.product, qty: c.qty, price: c.price, total: c.qty * c.price })),
+      // total은 기존과 동일하게 '상품 금액'만 담는다 (관리자앱 계산식 호환)
       total: subtotal,
+      // ★ 택배비 선택 결과 — 관리자 출고화면 체크박스의 기본값으로 쓰임
+      //   선택칸이 없는 대리점은 아예 기록하지 않아 기존 동작 그대로 유지
+      ...(feeChoiceAvailable ? { feeInclude: feeAmt > 0, feeAmount: feeAmt } : {}),
       totalQty: cart.reduce((s, c) => s + c.qty, 0),
       memo: memo || '',
       status: 'pending',
@@ -2471,7 +2559,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // (claude.ai, 로컬 등 다른 환경에서는 보안 정책상 등록 불가 → 무시)
   if('serviceWorker' in navigator && location.hostname.endsWith('github.io')){
     const swPath = '/KY/sw-KY.js';
-    navigator.serviceWorker.register(swPath + '?v=20260505-v21')
+    navigator.serviceWorker.register(swPath + '?v=20261015-v23')
       .then(r => console.log('[KY SW] 등록 완료:', r.scope))
       .catch(e => console.log('[KY SW] 등록 스킵 (정상):', e.message));
   }
